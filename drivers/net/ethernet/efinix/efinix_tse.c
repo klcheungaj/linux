@@ -27,104 +27,11 @@
 #define TX_BD_NUM_MAX			4096
 #define RX_BD_NUM_MAX			4096
 
-static struct tsemac_option tsemac_options[] = {
-	/* Turn on jumbo packet support for both Rx and Tx */
-	{
-		.opt = XAE_OPTION_JUMBO,
-		.reg = XAE_TC_OFFSET,
-		.m_or = XAE_TC_JUM_MASK,
-	}, {
-		.opt = XAE_OPTION_JUMBO,
-		.reg = XAE_RCW1_OFFSET,
-		.m_or = XAE_RCW1_JUM_MASK,
-	}, { /* Turn on VLAN packet support for both Rx and Tx */
-		.opt = XAE_OPTION_VLAN,
-		.reg = XAE_TC_OFFSET,
-		.m_or = XAE_TC_VLAN_MASK,
-	}, {
-		.opt = XAE_OPTION_VLAN,
-		.reg = XAE_RCW1_OFFSET,
-		.m_or = XAE_RCW1_VLAN_MASK,
-	}, { /* Turn on FCS stripping on receive packets */
-		.opt = XAE_OPTION_FCS_STRIP,
-		.reg = XAE_RCW1_OFFSET,
-		.m_or = XAE_RCW1_FCS_MASK,
-	}, { /* Turn on FCS insertion on transmit packets */
-		.opt = XAE_OPTION_FCS_INSERT,
-		.reg = XAE_TC_OFFSET,
-		.m_or = XAE_TC_FCS_MASK,
-	}, { /* Turn off length/type field checking on receive packets */
-		.opt = XAE_OPTION_LENTYPE_ERR,
-		.reg = XAE_RCW1_OFFSET,
-		.m_or = XAE_RCW1_LT_DIS_MASK,
-	}, { /* Turn on Rx flow control */
-		.opt = XAE_OPTION_FLOW_CONTROL,
-		.reg = XAE_FCC_OFFSET,
-		.m_or = XAE_FCC_FCRX_MASK,
-	}, { /* Turn on Tx flow control */
-		.opt = XAE_OPTION_FLOW_CONTROL,
-		.reg = XAE_FCC_OFFSET,
-		.m_or = XAE_FCC_FCTX_MASK,
-	}, { /* Turn on promiscuous frame filtering */
-		.opt = XAE_OPTION_PROMISC,
-		.reg = XAE_FMI_OFFSET,
-		.m_or = XAE_FMI_PM_MASK,
-	}, { /* Enable transmitter */
-		.opt = XAE_OPTION_TXEN,
-		.reg = XAE_TC_OFFSET,
-		.m_or = XAE_TC_TX_MASK,
-	}, { /* Enable receiver */
-		.opt = XAE_OPTION_RXEN,
-		.reg = XAE_RCW1_OFFSET,
-		.m_or = XAE_RCW1_RX_MASK,
-	},
-	{}
-};
-
-// struct dmasg_descriptor {
-// 	u32 next;	/* Physical address of next buffer descriptor */
-// 	u32 next_msb;	/* high 32 bits for IP >= v7.1, reserved on older IP */
-// 	u32 phys;
-// 	u32 phys_msb;	/* for IP >= v7.1, reserved for older IP */
-// 	u32 reserved3;
-// 	u32 reserved4;
-// 	u32 cntrl;
-// 	u32 status;
-// 	u32 app0;
-// 	u32 app1;	/* TX start << 16 | insert */
-// 	u32 app2;	/* TX csum seed */
-// 	u32 app3;
-// 	u32 app4;   /* Last field used by HW */
-// 	struct sk_buff *skb;
-// } __aligned(XAXIDMA_BD_MINIMUM_ALIGNMENT);
 
 int tsemac_mdio_setup(struct efx_tsemac_local *lp) {
 
 }
 
-static inline void tsemac_lock_mii(struct efx_tsemac_local *lp)
-{
-	if (lp->mii_bus)
-		mutex_lock(&lp->mii_bus->mdio_lock);
-}
-
-static inline void tsemac_unlock_mii(struct efx_tsemac_local *lp)
-{
-	if (lp->mii_bus)
-		mutex_unlock(&lp->mii_bus->mdio_lock);
-}
-
-static void desc_set_phys_addr(struct efx_tsemac_local *lp, dma_addr_t addr,
-			       struct dmasg_descriptor *desc)
-{
-	desc->from = lower_32_bits(addr);
-}
-
-static dma_addr_t desc_get_phys_addr(struct axienet_local *lp,
-				     struct dmasg_descriptor *desc)
-{
-	return desc->from;
-}
 
 static void tsemac_set_mac_address(struct net_device *ndev, const void *address)
 {
@@ -136,17 +43,17 @@ static void tsemac_set_mac_address(struct net_device *ndev, const void *address)
 		eth_hw_addr_random(ndev);
 
 	/* Set up unicast MAC address filter set its mac address */
-	tsemac_iow(lp, TSEMAC_MAC_ADDR_LO,
+	tsemac_out32(lp, TSEMAC_MAC_ADDR_LO,
 		    (ndev->dev_addr[0]) |
 		    (ndev->dev_addr[1] << 8) |
 		    (ndev->dev_addr[2] << 16) |
 		    (ndev->dev_addr[3] << 24));
-	tsemac_iow(lp, TSEMAC_MAC_ADDR_HI,
+	tsemac_out32(lp, TSEMAC_MAC_ADDR_HI,
 		     (ndev->dev_addr[4]) |
 		     (ndev->dev_addr[5] << 8));
 
-	tsemac_iow(lp, TSEMAC_MAC_ADDR_MAKE_LO, 0xFFFFFFFF);
-	tsemac_iow(lp, TSEMAC_MAC_ADDR_MAKE_HI, 0x0000FFFF);
+	tsemac_out32(lp, TSEMAC_MAC_ADDR_MAKE_LO, 0xFFFFFFFF);
+	tsemac_out32(lp, TSEMAC_MAC_ADDR_MAKE_HI, 0x0000FFFF);
 }
 
 static int netdev_set_mac_address(struct net_device *ndev, void *p)
@@ -166,42 +73,19 @@ static void tsemac_set_multicast_list(struct net_device *ndev)
 	if (ndev->flags & (IFF_ALLMULTI | IFF_PROMISC) ||
 							netdev_mc_count(ndev) > 1 ) {
 		ndev->flags |= IFF_PROMISC;
-		reg = tsemac_ior(lp, TSEMAC_COMMAND_CONFIG);
+		reg = tsemac_in32(lp, TSEMAC_COMMAND_CONFIG);
 		reg |= ETHERNET_CMD_PROMIS_EN;
-		tsemac_iow(lp, TSEMAC_COMMAND_CONFIG, reg);
+		tsemac_out32(lp, TSEMAC_COMMAND_CONFIG, reg);
 		dev_info(&ndev->dev, "Promiscuous mode enabled.\n");
 	} else {
-		reg = tsemac_ior(lp, TSEMAC_COMMAND_CONFIG);
+		reg = tsemac_in32(lp, TSEMAC_COMMAND_CONFIG);
 		reg &= ~ETHERNET_CMD_PROMIS_EN;
-		tsemac_iow(lp, TSEMAC_COMMAND_CONFIG, reg);
+		tsemac_out32(lp, TSEMAC_COMMAND_CONFIG, reg);
 		dev_info(&ndev->dev, "Promiscuous mode disabled.\n");
 	}
 }
 
-static void tsemac_setoptions(struct net_device *ndev, u32 options)
-{
-	//TODO: optional. May not needed in our IP
-}
 
-static void __tsemac_device_reset(struct efx_tsemac_local *lp, off_t offset)
-{
-	//TODO: optional
-}
-
-static void tsemac_device_reset(struct net_device *ndev)
-{
-	//TODO: PHY, MAC, DMA reset
-}
-
-static void tsemac_adjust_link(struct net_device *ndev)
-{
-	//TODO: adjest PHY speed settings. called afte auto negotiation
-}
-
-static void tsemac_start_xmit_done(struct net_device *ndev)
-{
-	//TODO: dma fields clear upon transmit complete 
-}
 
 static inline int tsemac_check_tx_bd_space(struct efx_tsemac_local *lp, int num_frag)
 {
@@ -212,11 +96,10 @@ static inline int tsemac_check_tx_bd_space(struct efx_tsemac_local *lp, int num_
 	rmb();
 	cur_p = &lp->tx_bd_v[(READ_ONCE(lp->tx_bd_tail) + num_frag) %
 			     lp->tx_bd_num];
-	if (cur_p->busy		//TODO: check busy bit
+	if (cur_p->busy)		//TODO: check busy bit
 		return NETDEV_TX_BUSY;
 	return 0;
 }
-
 
 static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
@@ -303,7 +186,7 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 	}
 	//TODO: check the end of frame mask in our sg_bd
 	cur_p->cntrl |= XAXIDMA_BD_CTRL_TXEOF_MASK;
-	// cur_p->skb = skb;	
+	cur_p->skb = skb;
 
 	tail_p = lp->tx_bd_p + sizeof(*lp->tx_bd_v) * new_tail_ptr;
 	if (++new_tail_ptr >= lp->tx_bd_num)
@@ -311,7 +194,7 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 	WRITE_ONCE(lp->tx_bd_tail, new_tail_ptr);
 
 	/* Start the transfer */
-	tsemac_dma_out_addr(lp, XAXIDMA_TX_TDESC_OFFSET, tail_p);
+	tsemac_dma_out32(lp, XAXIDMA_TX_TDESC_OFFSET, tail_p);
 
 	/* Stop queue if next transmit may not have space */
 	if (tsemac_check_tx_bd_space(lp, MAX_SKB_FRAGS + 1)) {
@@ -328,97 +211,83 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 	return NETDEV_TX_OK;
 }
 
-static void tsemac_recv(struct net_device *ndev)
-{
-	//TODO: optional 
-}
 static irqreturn_t tsemac_tx_irq(int irq, void *_ndev)
 {
-	//TODO: tx irq handler
-	u32 cr;
 	unsigned int status;
 	struct net_device *ndev = _ndev;
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
 
-	status = tsemac_dma_in32(lp, XAXIDMA_TX_SR_OFFSET);
-	if (status & (XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK)) {
-		tsemac_dma_out32(lp, XAXIDMA_TX_SR_OFFSET, status);
-		tsemac_start_xmit_done(lp->ndev);
-		goto out;
-	}
+	status = axienet_dma_in32(lp, XAXIDMA_TX_SR_OFFSET);
+
 	if (!(status & XAXIDMA_IRQ_ALL_MASK))
-		dev_err(&ndev->dev, "No interrupts asserted in Tx path\n");
-	if (status & XAXIDMA_IRQ_ERROR_MASK) {
-		dev_err(&ndev->dev, "DMA Tx error 0x%x\n", status);
-		dev_err(&ndev->dev, "Current BD is at: 0x%x\n",
-			(lp->tx_bd_v[lp->tx_bd_ci]).phys);
+		return IRQ_NONE;
 
-		cr = tsemac_dma_in32(lp, XAXIDMA_TX_CR_OFFSET);
-		/* Disable coalesce, delay timer and error interrupts */
-		cr &= (~XAXIDMA_IRQ_ALL_MASK);
-		/* Write to the Tx channel control register */
-		tsemac_dma_out32(lp, XAXIDMA_TX_CR_OFFSET, cr);
+	axienet_dma_out32(lp, XAXIDMA_TX_SR_OFFSET, status);
 
-		cr = tsemac_dma_in32(lp, XAXIDMA_RX_CR_OFFSET);
-		/* Disable coalesce, delay timer and error interrupts */
-		cr &= (~XAXIDMA_IRQ_ALL_MASK);
-		/* Write to the Rx channel control register */
-		tsemac_dma_out32(lp, XAXIDMA_RX_CR_OFFSET, cr);
+	if (unlikely(status & XAXIDMA_IRQ_ERROR_MASK)) {
+		netdev_err(ndev, "DMA Tx error 0x%x\n", status);
+		netdev_err(ndev, "Current BD is at: 0x%x%08x\n",
+			   (lp->tx_bd_v[lp->tx_bd_ci]).phys_msb,
+			   (lp->tx_bd_v[lp->tx_bd_ci]).phys);
+		schedule_work(&lp->dma_err_task);
+	} else {
+		/* Disable further TX completion interrupts and schedule
+		 * NAPI to handle the completions.
+		 */
+		u32 cr = lp->tx_dma_cr;
 
-		tasklet_schedule(&lp->dma_err_tasklet);
-		tsemac_dma_out32(lp, XAXIDMA_TX_SR_OFFSET, status);
+		cr &= ~(XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK);
+		axienet_dma_out32(lp, XAXIDMA_TX_CR_OFFSET, cr);
+
+		napi_schedule(&lp->napi_tx);
 	}
-out:
+
 	return IRQ_HANDLED;
 }
 
 static irqreturn_t tsemac_rx_irq(int irq, void *_ndev)
 {
 	//TODO: RX irq handler
-	u32 cr;
 	unsigned int status;
 	struct net_device *ndev = _ndev;
-	struct efx_tsemac_local *lp = netdev_priv(ndev);
+	struct axienet_local *lp = netdev_priv(ndev);
 
-	status = tsemac_dma_in32(lp, XAXIDMA_RX_SR_OFFSET);
-	if (status & (XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK)) {
-		tsemac_dma_out32(lp, XAXIDMA_RX_SR_OFFSET, status);
-		tsemac_recv(lp->ndev);
-		goto out;
-	}
+	status = axienet_dma_in32(lp, XAXIDMA_RX_SR_OFFSET);
+
 	if (!(status & XAXIDMA_IRQ_ALL_MASK))
-		dev_err(&ndev->dev, "No interrupts asserted in Rx path\n");
-	if (status & XAXIDMA_IRQ_ERROR_MASK) {
-		dev_err(&ndev->dev, "DMA Rx error 0x%x\n", status);
-		dev_err(&ndev->dev, "Current BD is at: 0x%x\n",
-			(lp->rx_bd_v[lp->rx_bd_ci]).phys);
+		return IRQ_NONE;
 
-		cr = tsemac_dma_in32(lp, XAXIDMA_TX_CR_OFFSET);
-		/* Disable coalesce, delay timer and error interrupts */
-		cr &= (~XAXIDMA_IRQ_ALL_MASK);
-		/* Finally write to the Tx channel control register */
-		tsemac_dma_out32(lp, XAXIDMA_TX_CR_OFFSET, cr);
+	axienet_dma_out32(lp, XAXIDMA_RX_SR_OFFSET, status);
 
-		cr = tsemac_dma_in32(lp, XAXIDMA_RX_CR_OFFSET);
-		/* Disable coalesce, delay timer and error interrupts */
-		cr &= (~XAXIDMA_IRQ_ALL_MASK);
-		/* write to the Rx channel control register */
-		tsemac_dma_out32(lp, XAXIDMA_RX_CR_OFFSET, cr);
+	if (unlikely(status & XAXIDMA_IRQ_ERROR_MASK)) {
+		netdev_err(ndev, "DMA Rx error 0x%x\n", status);
+		netdev_err(ndev, "Current BD is at: 0x%x%08x\n",
+			   (lp->rx_bd_v[lp->rx_bd_ci]).phys_msb,
+			   (lp->rx_bd_v[lp->rx_bd_ci]).phys);
+		schedule_work(&lp->dma_err_task);
+	} else {
+		/* Disable further RX completion interrupts and schedule
+		 * NAPI receive.
+		 */
+		u32 cr = lp->rx_dma_cr;
 
-		tasklet_schedule(&lp->dma_err_tasklet);
-		tsemac_dma_out32(lp, XAXIDMA_RX_SR_OFFSET, status);
+		cr &= ~(XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK);
+		axienet_dma_out32(lp, XAXIDMA_RX_CR_OFFSET, cr);
+
+		napi_schedule(&lp->napi_rx);
 	}
-out:
+
 	return IRQ_HANDLED;
 }
 
 static irqreturn_t tsemac_eth_irq(int irq, void *_ndev)
 {
+	//TODO: 
 	struct net_device *ndev = _ndev;
-	struct tsemac_local *lp = netdev_priv(ndev);
+	struct efx_tsemac_local *lp = netdev_priv(ndev);
 	unsigned int pending;
 
-	pending = tsemac_ior(lp, XAE_IP_OFFSET);
+	pending = tsemac_in32(lp, XAE_IP_OFFSET);
 	if (!pending)
 		return IRQ_NONE;
 
@@ -428,7 +297,7 @@ static irqreturn_t tsemac_eth_irq(int irq, void *_ndev)
 	if (pending & XAE_INT_RXRJECT_MASK)
 		ndev->stats.rx_frame_errors++;
 
-	tsemac_iow(lp, XAE_IS_OFFSET, pending);
+	tsemac_out32(lp, XAE_IS_OFFSET, pending);
 	return IRQ_HANDLED;
 }
 
@@ -499,7 +368,7 @@ err_tx_irq:
 
 static int tsemac_stop(struct net_device *ndev)
 {
-	struct tsemac_local *lp = netdev_priv(ndev);
+	struct efx_tsemac_local *lp = netdev_priv(ndev);
 
 	dev_dbg(&ndev->dev, "tsemac_close()\n");
 
@@ -509,12 +378,14 @@ static int tsemac_stop(struct net_device *ndev)
 	phylink_stop(lp->phylink);
 	phylink_disconnect_phy(lp->phylink);
 
-	tsemac_setoptions(ndev, lp->options &
-			   ~(XAE_OPTION_TXEN | XAE_OPTION_RXEN));	//TODO: check DISABLE options
+	// tsemac_setoptions(ndev, lp->options &
+	// 		   ~(XAE_OPTION_TXEN | XAE_OPTION_RXEN));	//TODO: check DISABLE options
+	tsemac_clear_32bit(lp, TSEMAC_COMMAND_CONFIG, 
+		ETHERNET_CMD_TX_ENA | ETHERNET_CMD_RX_ENA);
 
 	tsemac_dma_stop(lp);
 
-	tsemac_iow(lp, XAE_IE_OFFSET, 0);
+	tsemac_out32(lp, XAE_IE_OFFSET, 0);
 
 	cancel_work_sync(&lp->dma_err_task);
 
@@ -531,7 +402,7 @@ static int tsemac_change_mtu(struct net_device *ndev, int new_mtu)
 {
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
 
-	//TODO: port to our IP
+	//TODO: can I reject new_mtu if it is larger than lp_rxmem's size?
 	if (netif_running(ndev))
 		return -EBUSY;
 
@@ -571,7 +442,7 @@ static void tsemac_ethtools_get_regs(struct net_device *ndev, struct ethtool_reg
 
 	memset(data, 0, regs->len);
 	for(i=0 ; i<len ; i+=4) {
-		data[i] = tsemac_ior(lp, i);
+		data[i] = tsemac_in32(lp, i);
 	}
 }
 
@@ -616,6 +487,146 @@ static int tsemac_ethtools_set_ringparam(struct net_device *ndev,
 	return 0;
 }
 
+static int tsemac_tx_poll(struct napi_struct *napi, int budget)
+{
+	//TODO:
+	struct efx_tsemac_local *lp = container_of(napi, struct efx_tsemac_local, napi_tx);
+	struct net_device *ndev = lp->ndev;
+	u32 size = 0;
+	int packets;
+
+	packets = tsemac_free_tx_chain(lp, lp->tx_bd_ci, budget, false, &size, budget);
+
+	if (packets) {
+		lp->tx_bd_ci += packets;
+		if (lp->tx_bd_ci >= lp->tx_bd_num)
+			lp->tx_bd_ci %= lp->tx_bd_num;
+
+		ndev->stats.tx_packets += packets;
+		ndev->stats.tx_bytes += size;
+
+		/* Matches barrier in tsemac_start_xmit */
+		smp_mb();
+
+		if (!tsemac_check_tx_bd_space(lp, MAX_SKB_FRAGS + 1))
+			netif_wake_queue(ndev);
+	}
+
+	if (packets < budget && napi_complete_done(napi, packets)) {
+		/* Re-enable TX completion interrupts. This should
+		 * cause an immediate interrupt if any TX packets are
+		 * already pending.
+		 */
+		tsemac_dma_out32(lp, XAXIDMA_TX_CR_OFFSET, lp->tx_dma_cr);
+	}
+	return packets;
+}
+
+static int tsemac_rx_poll(struct napi_struct *napi, int budget)
+{
+	//TODO: 
+	u32 length;
+	u32 csumstatus;
+	u32 size = 0;
+	int packets = 0;
+	dma_addr_t tail_p = 0;
+	struct efx_tsemac_local *cur_p;
+	struct sk_buff *skb, *new_skb;
+	struct efx_tsemac_local *lp = container_of(napi, struct efx_tsemac_local, napi_rx);
+
+	cur_p = &lp->rx_bd_v[lp->rx_bd_ci];
+
+	while (packets < budget && (cur_p->status & XAXIDMA_BD_STS_COMPLETE_MASK)) {
+		dma_addr_t phys;
+
+		/* Ensure we see complete descriptor update */
+		dma_rmb();
+
+		skb = cur_p->skb;
+		cur_p->skb = NULL;
+
+		/* skb could be NULL if a previous pass already received the
+		 * packet for this slot in the ring, but failed to refill it
+		 * with a newly allocated buffer. In this case, don't try to
+		 * receive it again.
+		 */
+		if (likely(skb)) {
+			length = cur_p->app4 & 0x0000FFFF;
+
+			phys = desc_get_phys_addr(lp, cur_p);
+			dma_unmap_single(lp->dev, phys, lp->max_frm_size,
+					 DMA_FROM_DEVICE);
+
+			skb_put(skb, length);
+			skb->protocol = eth_type_trans(skb, lp->ndev);
+			/*skb_checksum_none_assert(skb);*/
+			skb->ip_summed = CHECKSUM_NONE;
+
+			/* if we're doing Rx csum offload, set it up */
+			if (lp->features & XAE_FEATURE_FULL_RX_CSUM) {
+				csumstatus = (cur_p->app2 &
+					      XAE_FULL_CSUM_STATUS_MASK) >> 3;
+				if (csumstatus == XAE_IP_TCP_CSUM_VALIDATED ||
+				    csumstatus == XAE_IP_UDP_CSUM_VALIDATED) {
+					skb->ip_summed = CHECKSUM_UNNECESSARY;
+				}
+			} else if ((lp->features & XAE_FEATURE_PARTIAL_RX_CSUM) != 0 &&
+				   skb->protocol == htons(ETH_P_IP) &&
+				   skb->len > 64) {
+				skb->csum = be32_to_cpu(cur_p->app3 & 0xFFFF);
+				skb->ip_summed = CHECKSUM_COMPLETE;
+			}
+
+			napi_gro_receive(napi, skb);
+
+			size += length;
+			packets++;
+		}
+
+		new_skb = napi_alloc_skb(napi, lp->max_frm_size);
+		if (!new_skb)
+			break;
+
+		phys = dma_map_single(lp->dev, new_skb->data,
+				      lp->max_frm_size,
+				      DMA_FROM_DEVICE);
+		if (unlikely(dma_mapping_error(lp->dev, phys))) {
+			if (net_ratelimit())
+				netdev_err(lp->ndev, "RX DMA mapping error\n");
+			dev_kfree_skb(new_skb);
+			break;
+		}
+		desc_set_phys_addr(lp, phys, cur_p);
+
+		cur_p->cntrl = lp->max_frm_size;
+		cur_p->status = 0;
+		cur_p->skb = new_skb;
+
+		/* Only update tail_p to mark this slot as usable after it has
+		 * been successfully refilled.
+		 */
+		tail_p = lp->rx_bd_p + sizeof(*lp->rx_bd_v) * lp->rx_bd_ci;
+
+		if (++lp->rx_bd_ci >= lp->rx_bd_num)
+			lp->rx_bd_ci = 0;
+		cur_p = &lp->rx_bd_v[lp->rx_bd_ci];
+	}
+
+	lp->ndev->stats.rx_packets += packets;
+	lp->ndev->stats.rx_bytes += size;
+
+	if (tail_p)
+		tsemac_dma_out_addr(lp, XAXIDMA_RX_TDESC_OFFSET, tail_p);
+
+	if (packets < budget && napi_complete_done(napi, packets)) {
+		/* Re-enable RX completion interrupts. This should
+		 * cause an immediate interrupt if any RX packets are
+		 * already pending.
+		 */
+		tsemac_dma_out32(lp, XAXIDMA_RX_CR_OFFSET, lp->rx_dma_cr);
+	}
+	return packets;
+}
 
 static void tsemac_ethtools_get_pauseparam(struct net_device *ndev, struct ethtool_pauseparam *epauseparm)
 {	
@@ -688,7 +699,281 @@ static int tsemac_ethtools_nway_reset(struct net_device *dev)
 }
 
 
-static void tsemac_dma_err_handler(unsigned long data);
+static struct efx_tsemac_local *pcs_to_tsemac_local(struct phylink_pcs *pcs)
+{
+	return container_of(pcs, struct efx_tsemac_local, pcs);
+}
+
+static void tsemac_pcs_get_state(struct phylink_pcs *pcs,
+				  struct phylink_link_state *state)
+{
+	struct mdio_device *pcs_phy = pcs_to_tsemac_local(pcs)->pcs_phy;
+
+	phylink_mii_c22_pcs_get_state(pcs_phy, state);
+}
+
+static void tsemac_pcs_an_restart(struct phylink_pcs *pcs)
+{
+	struct mdio_device *pcs_phy = pcs_to_tsemac_local(pcs)->pcs_phy;
+
+	phylink_mii_c22_pcs_an_restart(pcs_phy);
+}
+
+static int tsemac_pcs_config(struct phylink_pcs *pcs, unsigned int mode,
+			      phy_interface_t interface,
+			      const unsigned long *advertising,
+			      bool permit_pause_to_mac)
+{
+	struct mdio_device *pcs_phy = pcs_to_tsemac_local(pcs)->pcs_phy;
+	struct net_device *ndev = pcs_to_tsemac_local(pcs)->ndev;
+	struct efx_tsemac_local *lp = netdev_priv(ndev);
+	int ret;
+
+	// if (lp->switch_x_sgmii) {
+	// 	ret = mdiodev_write(pcs_phy, XLNX_MII_STD_SELECT_REG,
+	// 			    interface == PHY_INTERFACE_MODE_SGMII ?
+	// 				XLNX_MII_STD_SELECT_SGMII : 0);
+	// 	if (ret < 0) {
+	// 		netdev_warn(ndev,
+	// 			    "Failed to switch PHY interface: %d\n",
+	// 			    ret);
+	// 		return ret;
+	// 	}
+	// }
+
+	ret = phylink_mii_c22_pcs_config(pcs_phy, mode, interface, advertising);
+	if (ret < 0)
+		netdev_warn(ndev, "Failed to configure PCS: %d\n", ret);
+
+	return ret;
+}
+
+static struct phylink_pcs *tsemac_mac_select_pcs(struct phylink_config *config,
+						  phy_interface_t interface)
+{
+	struct net_device *ndev = to_net_dev(config->dev);
+	struct efx_tsemac_local *lp = netdev_priv(ndev);
+
+	if (interface == PHY_INTERFACE_MODE_1000BASEX ||
+	    interface ==  PHY_INTERFACE_MODE_SGMII)
+		return &lp->pcs;
+
+	return NULL;
+}
+
+static void tsemac_mac_config(struct phylink_config *config, unsigned int mode,
+			       const struct phylink_link_state *state)
+{
+	/* nothing meaningful to do */
+}
+
+static void tsemac_mac_link_down(struct phylink_config *config,
+				  unsigned int mode,
+				  phy_interface_t interface)
+{
+	/* nothing meaningful to do */
+}
+
+static void tsemac_mac_link_up(struct phylink_config *config,
+				struct phy_device *phy,
+				unsigned int mode, phy_interface_t interface,
+				int speed, int duplex,
+				bool tx_pause, bool rx_pause)
+{
+	struct net_device *ndev = to_net_dev(config->dev);
+	struct efx_tsemac_local *lp = netdev_priv(ndev);
+	u32 cmd_cfg, fcc_reg;
+
+	cmd_cfg = tsemac_in32(lp, TSEMAC_COMMAND_CONFIG);
+
+	switch (speed) {
+	case SPEED_1000:
+		cmd_cfg &= ETH_SPEED_MASK_1000;
+		break;
+	case SPEED_100:
+		cmd_cfg &= ETH_SPEED_MASK_100;
+		break;
+	case SPEED_10:
+		cmd_cfg &= ETH_SPEED_MASK_10;
+		break;
+	default:
+		dev_err(&ndev->dev,
+			"Speed other than 10, 100 or 1Gbps is not supported\n");
+		break;
+	}
+
+	//TODO: handle tx_pause
+	// if (tx_pause)
+	// 	fcc_reg |= XAE_FCC_FCTX_MASK;
+	// else
+	// 	fcc_reg &= ~XAE_FCC_FCTX_MASK;
+	if (rx_pause)
+		cmd_cfg &= ~ETHERNET_CMD_PAUSE_IGNORE;
+	else
+		cmd_cfg |= ETHERNET_CMD_PAUSE_IGNORE;
+
+	tsemac_out32(lp, TSEMAC_COMMAND_CONFIG, cmd_cfg);
+}
+
+void __tsemac_device_reset(struct efx_tsemac_local *lp, off_t offset)
+{
+	tsemac_out32(lp, ETHERNET_CTRL_PHY_RST, 1);
+	tsemac_out32(lp, ETHERNET_CTRL_MAC_RST, 1);
+	msleep(100);
+	tsemac_out32(lp, ETHERNET_CTRL_PHY_RST, 0);
+	tsemac_out32(lp, ETHERNET_CTRL_MAC_RST, 0);
+}
+
+static void tsemac_device_reset(struct net_device *ndev)
+{
+	//TODO: PHY, MAC, DMA reset
+	
+	u32 tsemac_status;
+	u32 frm_size_temp;
+	u32 cmd_cfg;
+	struct efx_tsemac_local *lp = netdev_priv(ndev);
+	int ret;
+
+	ret = __tsemac_device_reset(lp);
+	if (ret)
+		return ret;
+
+	lp->max_frm_size = ETHERNET_MAX_FRAME_SIZE;
+	// lp->options |= XAE_OPTION_VLAN;
+	// lp->options &= (~XAE_OPTION_JUMBO);
+
+
+	//TODO: can I skip this checkign if it has already been checked in tsemac_change_mtu function? 
+	if ((ndev->mtu > ETHERNET_MTU) && (ndev->mtu <= ETHERNET_JUMBO_MTU)) {
+		frm_size_temp = ndev->mtu + ETHERNET_HDR_SIZE +
+					ETHERNET_TRL_SIZE;
+
+		if (frm_size_temp <= lp->rxmem)
+			lp->max_frm_size = frm_size_temp;
+	}
+
+	ret = tsemac_dma_bd_init(ndev);
+	if (ret) {
+		netdev_err(ndev, "%s: descriptor allocation failed\n",
+			   __func__);
+		return ret;
+	}
+
+	// disable RX
+	tsemac_out32(lp, ETHERNET_CTRL_INTERRUPT_EN, 0);
+	tsemac_out32(lp, ETHERNET_CTRL_RECEIVE_START, 0);
+	// tsemac_status = tsemac_ior(lp, XAE_RCW1_OFFSET);
+	// tsemac_status &= ~XAE_RCW1_RX_MASK;
+	// tsemac_iow(lp, XAE_RCW1_OFFSET, tsemac_status);
+	// tsemac_status = tsemac_ior(lp, XAE_IP_OFFSET);
+	// if (tsemac_status & XAE_INT_RXRJECT_MASK)
+	// 	tsemac_iow(lp, XAE_IS_OFFSET, XAE_INT_RXRJECT_MASK);
+	// tsemac_iow(lp, XAE_IE_OFFSET, lp->eth_irq > 0 ?
+	// 	    XAE_INT_RECV_ERROR_MASK : 0);
+
+	// enable RX flow control
+	// tsemac_iow(lp, XAE_FCC_OFFSET, XAE_FCC_FCRX_MASK);
+	tsemac_clear_32bit(lp, TSEMAC_COMMAND_CONFIG, ETHERNET_CMD_PAUSE_IGNORE);
+
+	/* Sync default options with HW but leave receiver and
+	 * transmitter disabled.
+	 */
+	// tsemac_setoptions(ndev, lp->options & ~(XAE_OPTION_TXEN | XAE_OPTION_RXEN));
+	tsemac_clear_32bit(lp, TSEMAC_COMMAND_CONFIG, 
+		ETHERNET_CMD_TX_ENA | ETHERNET_CMD_RX_ENA);
+	tsemac_set_mac_address(ndev, NULL);
+	tsemac_set_multicast_list(ndev);
+	// tsemac_setoptions(ndev, lp->options);
+
+	netif_trans_update(ndev);
+
+	return 0;
+}
+
+static void tsemac_dma_err_handler(unsigned long data)
+{
+	u32 i;
+	u32 tsemac_status;
+	struct dmasg_descriptor *cur_p;
+	struct efx_tsemac_local *lp = container_of(work, struct efx_tsemac_local,
+						dma_err_task);
+	struct net_device *ndev = lp->ndev;
+
+	napi_disable(&lp->napi_tx);
+	napi_disable(&lp->napi_rx);
+
+	// tsemac_setoptions(ndev, lp->options &
+	// 		   ~(XAE_OPTION_TXEN | XAE_OPTION_RXEN));
+	tsemac_clear_32bit(lp, TSEMAC_COMMAND_CONFIG, 
+		ETHERNET_CMD_TX_ENA | ETHERNET_CMD_RX_ENA);
+
+	tsemac_dma_stop(lp);
+
+	for (i = 0; i < lp->tx_bd_num; i++) {
+		cur_p = &lp->tx_bd_v[i];
+		if (cur_p->cntrl) {
+			dma_addr_t phys = desc_get_phys_addr(lp, cur_p);
+
+			dma_unmap_single(lp->dev, phys,
+					 (cur_p->control & DMASG_DESCRIPTOR_CONTROL_BYTES),
+					 DMA_TO_DEVICE);
+		}
+		if (cur_p->skb)
+			dev_kfree_skb_irq(cur_p->skb);
+		cur_p->status = 0ULL;
+		cur_p->control = 0ULL;
+		cur_p->from = 0ULL;
+		cur_p->to = 0ULL;
+		cur_p->next = 0ULL;
+		cur_p->skb = NULL;
+	}
+
+	for (i = 0; i < lp->rx_bd_num; i++) {
+		cur_p = &lp->rx_bd_v[i];
+		cur_p->status = 0;
+		//TODO: do I need to clear control and the address?
+		cur_p->status = 0ULL;
+		cur_p->control = 0ULL;
+		cur_p->from = 0ULL;
+		cur_p->to = 0ULL;
+		cur_p->next = 0ULL;
+	}
+
+	lp->tx_bd_ci = 0;
+	lp->tx_bd_tail = 0;
+	lp->rx_bd_ci = 0;
+
+	tsemac_dma_start(lp);
+
+	// tsemac_status = tsemac_ior(lp, XAE_RCW1_OFFSET);
+	// tsemac_status &= ~XAE_RCW1_RX_MASK;
+	// tsemac_iow(lp, XAE_RCW1_OFFSET, tsemac_status);
+	tsemac_clear_32bit(lp, TSEMAC_COMMAND_CONFIG, 
+			ETHERNET_CMD_RX_ENA);
+
+	// tsemac_status = tsemac_ior(lp, XAE_IP_OFFSET);
+	// if (tsemac_status & XAE_INT_RXRJECT_MASK)
+	// 	tsemac_iow(lp, XAE_IS_OFFSET, XAE_INT_RXRJECT_MASK);
+	// tsemac_iow(lp, XAE_IE_OFFSET, lp->eth_irq > 0 ?
+	// 	    XAE_INT_RECV_ERROR_MASK : 0);
+	// tsemac_iow(lp, XAE_FCC_OFFSET, XAE_FCC_FCRX_MASK);
+	tsemac_out32(lp, ETHERNET_CTRL_INTERRUPT_EN, 0);
+	tsemac_out32(lp, ETHERNET_CTRL_RECEIVE_START, 0);
+
+	/* Sync default options with HW but leave receiver and
+	 * transmitter disabled.
+	 */
+	// tsemac_setoptions(ndev, lp->options &
+	// 		   ~(XAE_OPTION_TXEN | XAE_OPTION_RXEN));
+	tsemac_clear_32bit(lp, TSEMAC_COMMAND_CONFIG, 
+		ETHERNET_CMD_TX_ENA | ETHERNET_CMD_RX_ENA);
+	tsemac_set_mac_address(ndev, NULL);
+	tsemac_set_multicast_list(ndev);
+	// tsemac_setoptions(ndev, lp->options);
+	napi_enable(&lp->napi_rx);
+	napi_enable(&lp->napi_tx);
+}
+
 static int tsemac_probe(struct platform_device *pdev) 
 {
 	int ret;
@@ -720,7 +1005,7 @@ static int tsemac_probe(struct platform_device *pdev)
 	lp = netdev_priv(ndev);
 	lp->ndev = ndev;
 	lp->dev = &pdev->dev;
-	lp->options = XAE_OPTION_DEFAULTS;	//TODO: may use custom options
+	// lp->options = XAE_OPTION_DEFAULTS;	//TODO: may use custom options
 	lp->rx_bd_num = RX_BD_NUM_DEFAULT;	//is SG supported?
 	lp->tx_bd_num = TX_BD_NUM_DEFAULT;	//is SG supported?
 
@@ -793,19 +1078,19 @@ static int tsemac_probe(struct platform_device *pdev)
 	if (!ret) {
 		netdev_warn(ndev, "Please upgrade your device tree binary blob to use phy-mode");
 		switch (value) {
-		case XAE_PHY_TYPE_MII:
+		case TSEMAC_PHY_TYPE_MII:
 			lp->phy_mode = PHY_INTERFACE_MODE_MII;
 			break;
-		case XAE_PHY_TYPE_GMII:
+		case TSEMAC_PHY_TYPE_GMII:
 			lp->phy_mode = PHY_INTERFACE_MODE_GMII;
 			break;
-		case XAE_PHY_TYPE_RGMII_2_0:
+		case TSEMAC_PHY_TYPE_RGMII_2_0:
 			lp->phy_mode = PHY_INTERFACE_MODE_RGMII_ID;
 			break;
-		case XAE_PHY_TYPE_SGMII:
+		case TSEMAC_PHY_TYPE_SGMII:
 			lp->phy_mode = PHY_INTERFACE_MODE_SGMII;
 			break;
-		case XAE_PHY_TYPE_1000BASE_X:
+		case TSEMAC_PHY_TYPE_1000BASE_X:
 			lp->phy_mode = PHY_INTERFACE_MODE_1000BASEX;
 			break;
 		default:
@@ -961,6 +1246,19 @@ static int tsemac_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	return phylink_mii_ioctl(lp->phylink, rq, cmd);
 }
 
+static const struct phylink_pcs_ops tsemac_pcs_ops = {
+	.pcs_get_state = tsemac_pcs_get_state,
+	.pcs_config = tsemac_pcs_config,
+	.pcs_an_restart = tsemac_pcs_an_restart,
+};
+
+static const struct phylink_mac_ops tsemac_phylink_ops = {
+	.validate = phylink_generic_validate,
+	.mac_select_pcs = tsemac_mac_select_pcs,
+	.mac_config = tsemac_mac_config,
+	.mac_link_down = tsemac_mac_link_down,
+	.mac_link_up = tsemac_mac_link_up,
+};
 
 static const struct net_device_ops tsemac_netdev_ops = {
 	.ndo_open = tsemac_open,

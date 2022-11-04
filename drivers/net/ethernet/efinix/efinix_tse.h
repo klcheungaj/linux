@@ -7,24 +7,61 @@
 #include <linux/interrupt.h>
 #include <linux/if_vlan.h>
 
-#define EFXTSE_MTU      1500
+#define ETHERNET_HDR_SIZE				14 	/* Size of Ethernet header */
+#define ETHERNET_TRL_SIZE			 	4 	/* Size of Ethernet trailer (FCS) */
+#define ETHERNET_MTU					1500 /* Max MTU of an Ethernet frame */
+#define ETHERNET_JUMBO_MTU		      	9000 /* Max MTU of a jumbo Eth. frame */	
+#define ETHERNET_MAX_FRAME_SIZE			(ETHERNET_HDR_SIZE + ETHERNET_TRL_SIZE + ETHERNET_MTU)
 
 #define EFXTSE_TX_COUNT		0
 #define EFXTSE_TX_USEC		0
 #define EFXTSE_RX_COUNT		1
 #define EFXTSE_RX_USEC		50
 
-#define ETHERNET_CMD_TX_ENA                 0U
-#define ETHERNET_CMD_RX_ENA                 1U
-#define ETHERNET_CMD_XON_GEN                2U
-#define ETHERNET_CMD_PROMIS_EN              4U
-#define ETHERNET_CMD_CRC_FWD                6U
-#define ETHERNET_CMD_PAUSE_IGNORE           8U
-#define ETHERNET_CMD_TX_ADDR_INS            9U
-#define ETHERNET_CMD_RGMII_LOOP_ENA         15U
-#define ETHERNET_CMD_ETH_SPEED              16U
-#define ETHERNET_CMD_XOFF_GEN               22U
-#define ETHERNET_CMD_CNT_RESET              31U
+#define BIT_0   (1 << 0)
+#define BIT_1   (1 << 1)
+#define BIT_2   (1 << 2)
+#define BIT_3   (1 << 3)
+#define BIT_4   (1 << 4)
+#define BIT_5   (1 << 5)
+#define BIT_6   (1 << 6)
+#define BIT_7   (1 << 7)
+#define BIT_8   (1 << 8)
+#define BIT_9   (1 << 9)
+#define BIT_10  (1 << 10)
+#define BIT_11  (1 << 11)
+#define BIT_12  (1 << 12)
+#define BIT_13  (1 << 13)
+#define BIT_14  (1 << 14)
+#define BIT_15  (1 << 15)
+#define BIT_16  (1 << 16)
+#define BIT_17  (1 << 17)
+#define BIT_18  (1 << 18)
+#define BIT_19  (1 << 19)
+#define BIT_20  (1 << 20)
+#define BIT_21  (1 << 21)
+#define BIT_22  (1 << 22)
+#define BIT_23  (1 << 23)
+#define BIT_24  (1 << 24)
+#define BIT_25  (1 << 25)
+#define BIT_26  (1 << 26)
+#define BIT_27  (1 << 27)
+#define BIT_28  (1 << 28)
+#define BIT_29  (1 << 29)
+#define BIT_30  (1 << 30)
+#define BIT_31  (1 << 31)
+
+#define ETHERNET_CMD_TX_ENA                 BIT_0
+#define ETHERNET_CMD_RX_ENA                 BIT_1
+#define ETHERNET_CMD_XON_GEN                BIT_2
+#define ETHERNET_CMD_PROMIS_EN              BIT_4
+#define ETHERNET_CMD_CRC_FWD                BIT_6
+#define ETHERNET_CMD_PAUSE_IGNORE           BIT_8
+#define ETHERNET_CMD_TX_ADDR_INS            BIT_9
+#define ETHERNET_CMD_RGMII_LOOP_ENA         BIT_15
+#define ETHERNET_CMD_ETH_SPEED              BIT_16
+#define ETHERNET_CMD_XOFF_GEN               BIT_22
+#define ETHERNET_CMD_CNT_RESET              BIT_31
 
 //MAC Configuration Registers
 #define TSEMAC_VERSION 				0x0000
@@ -51,6 +88,82 @@
 #define TSEMAC_DST_MAC_ADDR_LO		0x0184
 #define	TSEMAC_DST_MAC_ADDR_HI		0x0188
 
+// additional TSEMAC control
+#define ETHERNET_CTRL_MAC_RST               0x200
+#define ETHERNET_CTRL_PHY_RST               0x204
+#define ETHERNET_CTRL_INTERRUPT_EN          0x208
+#define ETHERNET_CTRL_READ_COUNT            0x212
+#define ETHERNET_CTRL_INTERRUPT_CLR         0x216
+#define ETHERNET_CTRL_TRANSFER_START        0x220
+#define ETHERNET_CTRL_RECEIVE_START         0x224
+#define ETHERNET_CTRL_RECEIVE_COUNT         0x228
+#define ETHERNET_CTRL_RX_COALESCE           0x232
+#define ETHERNET_CTRL_RX_USEC               0x236
+
+#define TSEMAC_PHY_TYPE_MII				0
+#define TSEMAC_PHY_TYPE_GMII			1
+#define TSEMAC_PHY_TYPE_RGMII_1_3		2
+#define TSEMAC_PHY_TYPE_RGMII_2_0		3
+#define TSEMAC_PHY_TYPE_SGMII			4
+#define TSEMAC_PHY_TYPE_1000BASE_X		5
+
+#define ETH_SPEED_MASK_10				0xFFF1FFFF
+#define ETH_SPEED_MASK_100				0xFFF2FFFF
+#define ETH_SPEED_MASK_1000				0xFFF4FFFF
+
+
+#define dmasg_ca(base, channel)                                 (base + channel*0x80)
+#define DMASG_CHANNEL_INPUT_ADDRESS                             0x00
+#define DMASG_CHANNEL_INPUT_STREAM                              0x08
+#define DMASG_CHANNEL_INPUT_CONFIG                              0x0C
+#define DMASG_CHANNEL_INPUT_CONFIG_MEMORY                       BIT_12
+#define DMASG_CHANNEL_INPUT_CONFIG_STREAM                       BIT_0
+#define DMASG_CHANNEL_INPUT_CONFIG_COMPLETION_ON_PACKET         BIT_13
+#define DMASG_CHANNEL_INPUT_CONFIG_WAIT_ON_PACKET               BIT_14
+#define DMASG_CHANNEL_OUTPUT_ADDRESS                            0x10
+#define DMASG_CHANNEL_OUTPUT_STREAM                             0x18
+#define DMASG_CHANNEL_OUTPUT_CONFIG                             0x1C
+#define DMASG_CHANNEL_OUTPUT_CONFIG_MEMORY                      BIT_12
+#define DMASG_CHANNEL_OUTPUT_CONFIG_STREAM                      BIT_0
+#define DMASG_CHANNEL_OUTPUT_CONFIG_LAST                        BIT_13
+#define DMASG_CHANNEL_DIRECT_BYTES                              0x20
+#define DMASG_CHANNEL_STATUS                                    0x2C
+#define DMASG_CHANNEL_STATUS_DIRECT_START                       BIT_0
+#define DMASG_CHANNEL_STATUS_BUSY                               BIT_0
+#define DMASG_CHANNEL_STATUS_SELF_RESTART                       BIT_1
+#define DMASG_CHANNEL_STATUS_STOP                               BIT_2
+#define DMASG_CHANNEL_STATUS_LINKED_LIST_START                  BIT_4
+#define DMASG_CHANNEL_FIFO                                      0x40
+#define DMASG_CHANNEL_PRIORITY                                  0x44
+#define DMASG_CHANNEL_INTERRUPT_ENABLE                          0x50
+#define DMASG_CHANNEL_INTERRUPT_PENDING                         0x54
+#define DMASG_CHANNEL_PROGRESS_BYTES                            0x60
+#define DMASG_CHANNEL_LINKED_LIST_HEAD                          0x70
+// Interrupt at the end of each descriptor
+#define DMASG_CHANNEL_INTERRUPT_DESCRIPTOR_COMPLETION_MASK      BIT_0
+// Interrupt at the middle of each descriptor, require the half_completion_interrupt option to be enabled for the channel
+#define DMASG_CHANNEL_INTERRUPT_DESCRIPTOR_COMPLETION_HALF_MASK BIT_1
+// Interrupt when the channel is going off (not busy anymore)
+#define DMASG_CHANNEL_INTERRUPT_CHANNEL_COMPLETION_MASK         BIT_2
+// Interrupt each time that a linked list's descriptor status field is updated
+#define DMASG_CHANNEL_INTERRUPT_LINKED_LIST_UPDATE_MASK         BIT_3
+// Interrupt each time a S -> M  channel has done transferring a packet into the memory
+#define DMASG_CHANNEL_INTERRUPT_INPUT_PACKET_MASK               BIT_4
+// Number of bytes (minus one) reserved at the descriptor FROM/TO addresses.
+// If you want to transfer 10 bytes, this field should take the value 9
+#define DMASG_DESCRIPTOR_CONTROL_BYTES                          0x7FFFFFF
+//Only for M -> S transfers, specify if a end of packet should be send at the end of the transfer
+#define DMASG_DESCRIPTOR_CONTROL_END_OF_PACKET                  BIT_30
+// Number of bytes transferred by the DMA for this descriptor.
+#define DMASG_DESCRIPTOR_STATUS_BYTES                           0x7FFFFFF
+// Only for S -> M transfers, specify if the descriptor mark the end of a received packet
+// Can be used when the dmasg_input_stream function is called with completion_on_packet set.
+#define DMASG_DESCRIPTOR_STATUS_END_OF_PACKET                   BIT_30
+// Specify if the descriptor was executed by the DMA.
+// If the DMA read a completed descriptor, the channel is stopped and will produce a CHANNEL_COMPLETION interrupt.
+#define DMASG_DESCRIPTOR_STATUS_COMPLETED                       BIT_31
+#define DMASG_RX_BASE											0x0
+#define DMASG_TX_BASE											0x80
 
 struct dmasg_descriptor {
 	// See all DMASG_DESCRIPTOR_STATUS_* defines
@@ -133,25 +246,72 @@ struct efx_tsemac_local {
 	u32 coalesce_usec_tx;
 };
 
-static inline u32 tsemac_ior(struct efx_tsemac_local *lp, off_t reg)
+static inline void tsemac_lock_mii(struct efx_tsemac_local *lp)
+{
+	if (lp->mii_bus)
+		mutex_lock(&lp->mii_bus->mdio_lock);
+}
+
+static inline void tsemac_unlock_mii(struct efx_tsemac_local *lp)
+{
+	if (lp->mii_bus)
+		mutex_unlock(&lp->mii_bus->mdio_lock);
+}
+
+
+static inline void desc_set_phys_addr(struct efx_tsemac_local *lp, dma_addr_t addr,
+			       struct dmasg_descriptor *desc)
+{
+	desc->from = lower_32_bits(addr);
+}
+
+static inline dma_addr_t desc_get_phys_addr(struct efx_tsemac_local *lp,
+				     struct dmasg_descriptor *desc)
+{
+	return desc->from;
+}
+
+static inline u32 tsemac_in32(struct efx_tsemac_local *lp, off_t reg)
 {
 	return ioread32(lp->regs + reg);
 }
 
-static inline void tsemac_iow(struct efx_tsemac_local *lp, off_t reg,
+static inline void tsemac_out32(struct efx_tsemac_local *lp, off_t reg,
 			       u32 value)
 {
 	iowrite32(value, lp->regs + reg);
 }
 
-static inline u32 tsemac_dma_ior(struct efx_tsemac_local *lp, off_t reg)
-{
-	return ioread32(lp->dma_regs + reg);
-}
-
-static inline void tsemac_dma_iow(struct efx_tsemac_local *lp, off_t reg,
+static inline void tsemac_set_32bit(struct efx_tsemac_local *lp, off_t reg,
 			       u32 value)
 {
-	return iowrite32(value, lp->dma_regs + reg);
+	u32 temp = tsemac_in32(lp, reg);
+	temp |= value;
+	tsemac_out32(lp, reg, temp);
 }
+
+static inline void tsemac_clear_32bit(struct efx_tsemac_local *lp, off_t reg,
+			       u32 value)
+{
+	u32 temp = tsemac_in32(lp, reg);
+	temp &= ~value;
+	tsemac_out32(lp, reg, temp);
+}
+
+static inline u32 tsemac_dma_in32(struct efx_tsemac_local *lp, off_t reg, off_t ch_offset)
+{
+	return ioread32(lp->dma_regs + reg + ch_offset);
+}
+
+static inline void tsemac_dma_out32(struct efx_tsemac_local *lp, off_t reg, off_t ch_offset,
+			       u32 value)
+{
+	return iowrite32(value, lp->dma_regs + reg + ch_offset);
+}
+
+int tsemac_free_tx_chain(struct efx_tsemac_local *lp, u32 first_bd,
+				 int nr_bds, bool force, u32 *sizep, int budget);
+
+void __tsemac_device_reset(struct efx_tsemac_local *lp, off_t offset);
+
 #endif
