@@ -58,7 +58,6 @@ static int tsemac_mdio_wait_until_ready(struct efx_tsemac_local *lp)
 
 static int tsemac_mdio_read(struct mii_bus *bus, int phy_id, int reg)
 {
-    //TODO:
 	u32 rc;
 	int ret;
 	struct efx_tsemac_local *lp = bus->priv;

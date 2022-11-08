@@ -16,7 +16,7 @@
 #include <linux/ethtool.h>
 #include "efinix_tse.h"
 
-
+#define DMASG_BYTE_PER_BURST		32
 
 int tsemac_free_tx_chain(struct efx_tsemac_local *lp, u32 first_bd,
 				 int nr_bds, bool force, u32 *sizep, int budget)
@@ -38,7 +38,7 @@ int tsemac_free_tx_chain(struct efx_tsemac_local *lp, u32 first_bd,
 
 		/* Ensure we see complete descriptor update */
 		dma_rmb();
-		phys = desc_get_phys_addr(lp, cur_p);
+		phys = desc_get_tx_phys_addr(lp, cur_p);
 		dma_unmap_single(lp->dev, phys,
 				 (cur_p->control & DMASG_DESCRIPTOR_CONTROL_BYTES),
 				 DMA_TO_DEVICE);
@@ -84,12 +84,12 @@ void tsemac_dma_bd_release(struct net_device *ndev)
 
 		dev_kfree_skb(lp->rx_bd_v[i].skb);
 
-		/* For each descriptor, we programmed cntrl with the (non-zero)
+		/* For each descriptor, we programmed control with the (non-zero)
 		 * descriptor size, after it had been successfully allocated.
 		 * So a non-zero value in there means we need to unmap it.
 		 */
 		if (lp->rx_bd_v[i].control) {
-			phys = desc_get_phys_addr(lp, &lp->rx_bd_v[i]);
+			phys = desc_get_rx_phys_addr(lp, &lp->rx_bd_v[i]);
 			dma_unmap_single(lp->dev, phys,
 					 lp->max_frm_size, DMA_FROM_DEVICE);
 		}
@@ -106,29 +106,28 @@ void tsemac_dma_stop(struct efx_tsemac_local *lp)
 	int count;
 	u32 cr, sr;
 
-	cr = tsemac_dma_in32(lp, DMASG_CHANNEL_STATUS, DMASG_RX_BASE);
-	cr &= ~DMASG_CHANNEL_STATUS_STOP;
-	tsemac_dma_out32(lp, DMASG_CHANNEL_STATUS, DMASG_RX_BASE, cr);
-	tsemac_dma_out32(lp, DMASG_CHANNEL_INTERRUPT_ENABLE, DMASG_RX_BASE, 0);
+	cr = tsemac_dma_in32(lp, DMA_CH_STATUS, DMASG_RX_BASE);
+	cr &= ~DMA_CH_STATUS_STOP;
+	tsemac_dma_out32(lp, DMA_CH_STATUS, DMASG_RX_BASE, cr);
+	tsemac_dma_out32(lp, DMA_CH_INTERRUPT_ENABLE, DMASG_RX_BASE, 0);
 	synchronize_irq(lp->rx_irq);
 
-	cr = tsemac_dma_in32(lp, DMASG_CHANNEL_STATUS, DMASG_TX_BASE);
-	cr &= ~DMASG_CHANNEL_STATUS_STOP;
-	tsemac_dma_out32(lp, DMASG_CHANNEL_STATUS, DMASG_TX_BASE, cr);
+	cr = tsemac_dma_in32(lp, DMA_CH_STATUS, DMASG_TX_BASE);
+	cr &= ~DMA_CH_STATUS_STOP;
+	tsemac_dma_out32(lp, DMA_CH_STATUS, DMASG_TX_BASE, cr);
 	synchronize_irq(lp->tx_irq);
 
-	/* TODO: Give DMAs a chance to halt gracefully */
-	// sr = tsemac_dma_in32(lp, XAXIDMA_RX_SR_OFFSET);
-	// for (count = 0; !(sr & XAXIDMA_SR_HALT_MASK) && count < 5; ++count) {
-	// 	msleep(20);
-	// 	sr = tsemac_dma_in32(lp, XAXIDMA_RX_SR_OFFSET);
-	// }
+	sr = tsemac_dma_in32(lp, DMA_CH_STATUS, DMASG_RX_BASE);
+	for (count = 0; (sr & DMA_CH_STATUS_BUSY) && count < 5; ++count) {
+		msleep(20);
+		sr = tsemac_dma_in32(lp, DMA_CH_STATUS, DMASG_RX_BASE);
+	}
 
-	// sr = tsemac_dma_in32(lp, XAXIDMA_TX_SR_OFFSET);
-	// for (count = 0; !(sr & XAXIDMA_SR_HALT_MASK) && count < 5; ++count) {
-	// 	msleep(20);
-	// 	sr = tsemac_dma_in32(lp, XAXIDMA_TX_SR_OFFSET);
-	// }
+	sr = tsemac_dma_in32(lp, DMA_CH_STATUS, DMASG_TX_BASE);
+	for (count = 0; (sr & DMA_CH_STATUS_BUSY) && count < 5; ++count) {
+		msleep(20);
+		sr = tsemac_dma_in32(lp, DMA_CH_STATUS, DMASG_TX_BASE);
+	}
 
 	/* Do a reset to ensure DMA is really stopped */
 	tsemac_lock_mii(lp);
@@ -138,8 +137,8 @@ void tsemac_dma_stop(struct efx_tsemac_local *lp)
 
 void tsemac_dma_start(struct efx_tsemac_local *lp)
 {
+	//TODO: add AXI-Stream ID support
 	//TODO: find an alternative solution for DMA interrupt coalescing
-	//		assume interrupt at the first packet
 
 	// /* Start updating the Rx channel control register */
 	// lp->rx_dma_cr = (lp->coalesce_count_rx << XAXIDMA_COALESCE_SHIFT) |
@@ -165,13 +164,27 @@ void tsemac_dma_start(struct efx_tsemac_local *lp)
 	// 			 XAXIDMA_IRQ_DELAY_MASK;
 	// tsemac_dma_out32(lp, XAXIDMA_TX_CR_OFFSET, lp->tx_dma_cr);
 
-	tsemac_dma_out32(lp, DMASG_RX_BASE + DMASG_CHANNEL_LINKED_LIST_HEAD, lower_32_bits(lp->rx_bd_p));
-	lp->rx_dma_cr = DMASG_CHANNEL_STATUS_LINKED_LIST_START;
-	tsemac_dma_out32(lp, DMASG_RX_BASE + DMASG_CHANNEL_STATUS, lp->rx_dma_cr);
+	//TODO: setup irq, descrpitor address
+	tsemac_dma_out32(lp, DMA_CH_INPUT_CONFIG, DMASG_RX_BASE, 
+				DMA_CH_INPUT_CONFIG_COMPLETION_ON_PACKET | 
+					DMA_CH_INPUT_CONFIG_WAIT_ON_PACKET);
+	tsemac_dma_out32(lp, DMA_CH_OUTPUT_CONFIG, DMASG_RX_BASE, 
+				DMA_CH_OUTPUT_CONFIG_MEMORY | 
+				((DMASG_BYTE_PER_BURST-1) & DMA_CH_BYTE_PER_BURST_MASK)); 
+	tsemac_dma_out32(lp, DMA_CH_LINKED_LIST_HEAD, DMASG_RX_BASE, lower_32_bits(lp->rx_bd_p));
+	lp->rx_dma_cr = DMA_CH_INTERRUPT_DESCRIPTOR_COMPLETION_MASK;
+	tsemac_dma_out32(lp, DMA_CH_INTERRUPT_ENABLE, DMASG_RX_BASE, lp->rx_dma_cr);
+	tsemac_dma_out32(lp, DMA_CH_STATUS, DMASG_RX_BASE, DMA_CH_STATUS_LINKED_LIST_START);
 
-	tsemac_dma_out32(lp, DMASG_TX_BASE + DMASG_CHANNEL_LINKED_LIST_HEAD, lower_32_bits(lp->tx_bd_p));
-	lp->tx_dma_cr = DMASG_CHANNEL_STATUS_LINKED_LIST_START;
-	tsemac_dma_out32(lp, DMASG_TX_BASE + DMASG_CHANNEL_STATUS, lp->tx_dma_cr);
+	tsemac_dma_out32(lp, DMA_CH_INPUT_CONFIG, DMASG_TX_BASE, 
+					DMA_CH_INPUT_CONFIG_MEMORY |
+					((DMASG_BYTE_PER_BURST-1) & DMA_CH_BYTE_PER_BURST_MASK)); 
+	/* nothing to set. Make sure BIT_12 is zero */
+	tsemac_dma_out32(lp, DMA_CH_OUTPUT_CONFIG, DMASG_TX_BASE, 0);
+	tsemac_dma_out32(lp, DMA_CH_LINKED_LIST_HEAD, DMASG_TX_BASE, lower_32_bits(lp->tx_bd_p));
+	lp->tx_dma_cr = DMA_CH_INTERRUPT_DESCRIPTOR_COMPLETION_MASK;
+	tsemac_dma_out32(lp, DMA_CH_INTERRUPT_ENABLE, DMASG_TX_BASE, lp->tx_dma_cr);
+	tsemac_dma_out32(lp, DMA_CH_STATUS, DMASG_TX_BASE, lp->tx_dma_cr);
 }
 
 int tsemac_dma_bd_init(struct net_device *ndev)
@@ -200,17 +213,14 @@ int tsemac_dma_bd_init(struct net_device *ndev)
 		goto out;
 
 	for (i = 0; i < lp->tx_bd_num; i++) {
-		dma_addr_t addr = lp->tx_bd_p +
-				  sizeof(*lp->tx_bd_v) *
-				  ((i + 1) % lp->tx_bd_num);
-
-		lp->tx_bd_v[i].next = lower_32_bits(addr);
+		dma_addr_t next_addr = lp->tx_bd_p + sizeof(*lp->tx_bd_v) *
+					((i + 1) % lp->tx_bd_num);
+		/* next address of the last descriptor is the first descriptor */
+		lp->tx_bd_v[i].next = lower_32_bits(next_addr);
 	}
 
 	for (i = 0; i < lp->rx_bd_num; i++) {
-		dma_addr_t addr;
-
-		addr = lp->rx_bd_p + sizeof(*lp->rx_bd_v) *
+		dma_addr_t addr = lp->rx_bd_p + sizeof(*lp->rx_bd_v) *
 			((i + 1) % lp->rx_bd_num);
 		lp->rx_bd_v[i].next = lower_32_bits(addr);
 
@@ -225,9 +235,9 @@ int tsemac_dma_bd_init(struct net_device *ndev)
 			netdev_err(ndev, "DMA mapping error\n");
 			goto out;
 		}
-		desc_set_phys_addr(lp, addr, &lp->rx_bd_v[i]);
+		desc_set_rx_phys_addr(lp, addr, &lp->rx_bd_v[i]);
 
-		lp->rx_bd_v[i].control = lp->max_frm_size;	//TODO: add bit mask
+		lp->rx_bd_v[i].control = lp->max_frm_size | DMASG_DESCRIPTOR_CONTROL_BYTES;
 	}
 
 	tsemac_dma_start(lp);

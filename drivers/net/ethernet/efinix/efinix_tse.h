@@ -20,38 +20,38 @@
 #define EFXTSE_RX_COUNT		1
 #define EFXTSE_RX_USEC		50
 
-#define BIT_0   (1U << 0)
-#define BIT_1   (1U << 1)
-#define BIT_2   (1U << 2)
-#define BIT_3   (1U << 3)
-#define BIT_4   (1U << 4)
-#define BIT_5   (1U << 5)
-#define BIT_6   (1U << 6)
-#define BIT_7   (1U << 7)
-#define BIT_8   (1U << 8)
-#define BIT_9   (1U << 9)
-#define BIT_10  (1U << 10)
-#define BIT_11  (1U << 11)
-#define BIT_12  (1U << 12)
-#define BIT_13  (1U << 13)
-#define BIT_14  (1U << 14)
-#define BIT_15  (1U << 15)
-#define BIT_16  (1U << 16)
-#define BIT_17  (1U << 17)
-#define BIT_18  (1U << 18)
-#define BIT_19  (1U << 19)
-#define BIT_20  (1U << 20)
-#define BIT_21  (1U << 21)
-#define BIT_22  (1U << 22)
-#define BIT_23  (1U << 23)
-#define BIT_24  (1U << 24)
-#define BIT_25  (1U << 25)
-#define BIT_26  (1U << 26)
-#define BIT_27  (1U << 27)
-#define BIT_28  (1U << 28)
-#define BIT_29  (1U << 29)
-#define BIT_30  (1U << 30)
-#define BIT_31  (1U << 31)
+#define BIT_0   			(1U << 0)
+#define BIT_1   			(1U << 1)
+#define BIT_2   			(1U << 2)
+#define BIT_3   			(1U << 3)
+#define BIT_4   			(1U << 4)
+#define BIT_5   			(1U << 5)
+#define BIT_6   			(1U << 6)
+#define BIT_7   			(1U << 7)
+#define BIT_8   			(1U << 8)
+#define BIT_9   			(1U << 9)
+#define BIT_10  			(1U << 10)
+#define BIT_11  			(1U << 11)
+#define BIT_12  			(1U << 12)
+#define BIT_13  			(1U << 13)
+#define BIT_14  			(1U << 14)
+#define BIT_15  			(1U << 15)
+#define BIT_16  			(1U << 16)
+#define BIT_17  			(1U << 17)
+#define BIT_18  			(1U << 18)
+#define BIT_19  			(1U << 19)
+#define BIT_20  			(1U << 20)
+#define BIT_21  			(1U << 21)
+#define BIT_22  			(1U << 22)
+#define BIT_23  			(1U << 23)
+#define BIT_24  			(1U << 24)
+#define BIT_25  			(1U << 25)
+#define BIT_26  			(1U << 26)
+#define BIT_27  			(1U << 27)
+#define BIT_28  			(1U << 28)
+#define BIT_29  			(1U << 29)
+#define BIT_30  			(1U << 30)
+#define BIT_31  			(1U << 31)
 
 #define ETHERNET_CMD_TX_ENA                 BIT_0
 #define ETHERNET_CMD_RX_ENA                 BIT_1
@@ -115,42 +115,41 @@
 
 
 #define dmasg_ca(base, channel)                                 (base + channel*0x80)
-#define DMASG_CHANNEL_INPUT_ADDRESS                             0x00
-#define DMASG_CHANNEL_INPUT_STREAM                              0x08
-#define DMASG_CHANNEL_INPUT_CONFIG                              0x0C
-#define DMASG_CHANNEL_INPUT_CONFIG_MEMORY                       BIT_12
-#define DMASG_CHANNEL_INPUT_CONFIG_STREAM                       BIT_0
-#define DMASG_CHANNEL_INPUT_CONFIG_COMPLETION_ON_PACKET         BIT_13
-#define DMASG_CHANNEL_INPUT_CONFIG_WAIT_ON_PACKET               BIT_14
-#define DMASG_CHANNEL_OUTPUT_ADDRESS                            0x10
-#define DMASG_CHANNEL_OUTPUT_STREAM                             0x18
-#define DMASG_CHANNEL_OUTPUT_CONFIG                             0x1C
-#define DMASG_CHANNEL_OUTPUT_CONFIG_MEMORY                      BIT_12
-#define DMASG_CHANNEL_OUTPUT_CONFIG_STREAM                      BIT_0
-#define DMASG_CHANNEL_OUTPUT_CONFIG_LAST                        BIT_13
-#define DMASG_CHANNEL_DIRECT_BYTES                              0x20
-#define DMASG_CHANNEL_STATUS                                    0x2C
-#define DMASG_CHANNEL_STATUS_DIRECT_START                       BIT_0
-#define DMASG_CHANNEL_STATUS_BUSY                               BIT_0
-#define DMASG_CHANNEL_STATUS_SELF_RESTART                       BIT_1
-#define DMASG_CHANNEL_STATUS_STOP                               BIT_2
-#define DMASG_CHANNEL_STATUS_LINKED_LIST_START                  BIT_4
-#define DMASG_CHANNEL_FIFO                                      0x40
-#define DMASG_CHANNEL_PRIORITY                                  0x44
-#define DMASG_CHANNEL_INTERRUPT_ENABLE                          0x50
-#define DMASG_CHANNEL_INTERRUPT_PENDING                         0x54
-#define DMASG_CHANNEL_PROGRESS_BYTES                            0x60
-#define DMASG_CHANNEL_LINKED_LIST_HEAD                          0x70
+#define DMA_CH_BYTE_PER_BURST_MASK                       0xFFF
+#define DMA_CH_INPUT_ADDRESS                             0x00
+#define DMA_CH_INPUT_STREAM                              0x08
+#define DMA_CH_INPUT_CONFIG                              0x0C
+#define DMA_CH_INPUT_CONFIG_MEMORY                       BIT_12
+#define DMA_CH_INPUT_CONFIG_COMPLETION_ON_PACKET         BIT_13
+#define DMA_CH_INPUT_CONFIG_WAIT_ON_PACKET               BIT_14
+#define DMA_CH_OUTPUT_ADDRESS                            0x10
+#define DMA_CH_OUTPUT_STREAM                             0x18
+#define DMA_CH_OUTPUT_CONFIG                             0x1C
+#define DMA_CH_OUTPUT_CONFIG_MEMORY                      BIT_12
+#define DMA_CH_OUTPUT_CONFIG_LAST                        BIT_13
+#define DMA_CH_DIRECT_BYTES                              0x20
+#define DMA_CH_STATUS                                    0x2C
+#define DMA_CH_STATUS_DIRECT_START                       BIT_0
+#define DMA_CH_STATUS_BUSY                               BIT_0
+#define DMA_CH_STATUS_SELF_RESTART                       BIT_1
+#define DMA_CH_STATUS_STOP                               BIT_2
+#define DMA_CH_STATUS_LINKED_LIST_START                  BIT_4
+#define DMA_CH_FIFO                                      0x40
+#define DMA_CH_PRIORITY                                  0x44
+#define DMA_CH_INTERRUPT_ENABLE                          0x50
+#define DMA_CH_INTERRUPT_PENDING                         0x54
+#define DMA_CH_PROGRESS_BYTES                            0x60
+#define DMA_CH_LINKED_LIST_HEAD                          0x70
 // Interrupt at the end of each descriptor
-#define DMASG_CHANNEL_INTERRUPT_DESCRIPTOR_COMPLETION_MASK      BIT_0
+#define DMA_CH_INTERRUPT_DESCRIPTOR_COMPLETION_MASK      BIT_0
 // Interrupt at the middle of each descriptor, require the half_completion_interrupt option to be enabled for the channel
-#define DMASG_CHANNEL_INTERRUPT_DESCRIPTOR_COMPLETION_HALF_MASK BIT_1
+#define DMA_CH_INTERRUPT_DESCRIPTOR_COMPLETION_HALF_MASK BIT_1
 // Interrupt when the channel is going off (not busy anymore)
-#define DMASG_CHANNEL_INTERRUPT_CHANNEL_COMPLETION_MASK         BIT_2
+#define DMA_CH_INTERRUPT_CHANNEL_COMPLETION_MASK         BIT_2
 // Interrupt each time that a linked list's descriptor status field is updated
-#define DMASG_CHANNEL_INTERRUPT_LINKED_LIST_UPDATE_MASK         BIT_3
+#define DMA_CH_INTERRUPT_LINKED_LIST_UPDATE_MASK         BIT_3
 // Interrupt each time a S -> M  channel has done transferring a packet into the memory
-#define DMASG_CHANNEL_INTERRUPT_INPUT_PACKET_MASK               BIT_4
+#define DMA_CH_INTERRUPT_INPUT_PACKET_MASK               BIT_4
 // Number of bytes (minus one) reserved at the descriptor FROM/TO addresses.
 // If you want to transfer 10 bytes, this field should take the value 9
 #define DMASG_DESCRIPTOR_CONTROL_BYTES                          0x7FFFFFF
@@ -221,7 +220,6 @@ struct efx_tsemac_local {
 	phy_interface_t phy_mode;
 
 	/* Buffer descriptors */
-	//TODO: support SG mode
 	struct napi_struct napi_rx;
 	struct napi_struct napi_tx;
 
@@ -271,17 +269,28 @@ static inline void tsemac_unlock_mii(struct efx_tsemac_local *lp)
 		mutex_unlock(&lp->mii_bus->mdio_lock);
 }
 
-
-static inline void desc_set_phys_addr(struct efx_tsemac_local *lp, dma_addr_t addr,
+static inline void desc_set_tx_phys_addr(struct efx_tsemac_local *lp, dma_addr_t addr,
 			       struct dmasg_descriptor *desc)
 {
 	desc->from = lower_32_bits(addr);
 }
 
-static inline dma_addr_t desc_get_phys_addr(struct efx_tsemac_local *lp,
+static inline dma_addr_t desc_get_tx_phys_addr(struct efx_tsemac_local *lp,
 				     struct dmasg_descriptor *desc)
 {
 	return desc->from;
+}
+
+static inline void desc_set_rx_phys_addr(struct efx_tsemac_local *lp, dma_addr_t addr,
+			       struct dmasg_descriptor *desc)
+{
+	desc->to = lower_32_bits(addr);
+}
+
+static inline dma_addr_t desc_get_rx_phys_addr(struct efx_tsemac_local *lp,
+				     struct dmasg_descriptor *desc)
+{
+	return desc->to;
 }
 
 static inline u32 tsemac_in32(struct efx_tsemac_local *lp, off_t reg)
