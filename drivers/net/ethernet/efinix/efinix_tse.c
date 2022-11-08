@@ -1,5 +1,5 @@
 
-#include <linux/types.h>
+#include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/etherdevice.h>
 #include <linux/module.h>
@@ -10,12 +10,17 @@
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
 #include <linux/skbuff.h>
-#include <linux/spinlock.h>
+#include <linux/math64.h>
 #include <linux/phy.h>
 #include <linux/mii.h>
 #include <linux/ethtool.h>
+#include <linux/netdevice.h>
+#include <linux/spinlock.h>
+#include <linux/interrupt.h>
+#include <linux/phylink.h>
 #include "efinix_tse.h"
 
+#define DRIVER_NAME			"efx_tsemac"
 #define DRIVER_DESCRIPTION	"Efinix TSEMAC driver"
 #define DRIVER_VERSION		"0.01"
 
@@ -27,6 +32,14 @@
 #define TX_BD_NUM_MAX			4096
 #define RX_BD_NUM_MAX			4096
 
+static const struct of_device_id tsemac_of_match[] = {
+	{ .compatible = "efinix,tsemac-0.01.a", }
+};
+
+int __tsemac_device_reset(struct efx_tsemac_local *lp);
+static int tsemac_device_reset(struct net_device *ndev);
+static void tsemac_dma_err_handler(struct work_struct *work);
+static int tsemac_probe(struct platform_device *pdev);
 
 int tsemac_mdio_setup(struct efx_tsemac_local *lp) {
 
@@ -96,7 +109,7 @@ static inline int tsemac_check_tx_bd_space(struct efx_tsemac_local *lp, int num_
 	rmb();
 	cur_p = &lp->tx_bd_v[(READ_ONCE(lp->tx_bd_tail) + num_frag) %
 			     lp->tx_bd_num];
-	if (cur_p->busy)		//TODO: check busy bit
+	if (cur_p->control)
 		return NETDEV_TX_BUSY;
 	return 0;
 }
@@ -138,10 +151,10 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 	}
 	//TODO: support hardware checksum in the future
 	// if (skb->ip_summed == CHECKSUM_PARTIAL) {
-	// 	if (lp->features & XAE_FEATURE_FULL_TX_CSUM) {
+	// 	if (lp->features & TSEMAC_FEATURE_FULL_TX_CSUM) {
 	// 		/* Tx Full Checksum Offload Enabled */
 	// 		cur_p->app0 |= 2;
-	// 	} else if (lp->features & XAE_FEATURE_PARTIAL_TX_CSUM) {
+	// 	} else if (lp->features & TSEMAC_FEATURE_PARTIAL_TX_CSUM) {
 	// 		csum_start_off = skb_transport_offset(skb);
 	// 		csum_index_off = csum_start_off + skb->csum_offset;
 	// 		/* Tx Partial Checksum Offload Enabled */
@@ -161,8 +174,8 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 		return NETDEV_TX_OK;
 	}
 	desc_set_phys_addr(lp, phys, cur_p);
-	//TODO: check location of the byte length register in our sg_bd 
-	cur_p->cntrl = skb_headlen(skb) | XAXIDMA_BD_CTRL_TXSOF_MASK;
+	////TODO: check location of the byte length register in our sg_bd 
+	// cur_p->cntrl = skb_headlen(skb) | XAXIDMA_BD_CTRL_TXSOF_MASK;
 
 	for (ii = 0; ii < num_frag; ii++) {
 		if (++new_tail_ptr >= lp->tx_bd_num)
@@ -182,10 +195,10 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 			return NETDEV_TX_OK;
 		}
 		desc_set_phys_addr(lp, phys, cur_p);
-		cur_p->cntrl = skb_frag_size(frag);
+		cur_p->control = skb_frag_size(frag) | DMASG_DESCRIPTOR_CONTROL_BYTES;
 	}
 	//TODO: check the end of frame mask in our sg_bd
-	cur_p->cntrl |= XAXIDMA_BD_CTRL_TXEOF_MASK;
+	cur_p->control |= DMASG_DESCRIPTOR_CONTROL_END_OF_PACKET;
 	cur_p->skb = skb;
 
 	tail_p = lp->tx_bd_p + sizeof(*lp->tx_bd_v) * new_tail_ptr;
@@ -194,7 +207,8 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 	WRITE_ONCE(lp->tx_bd_tail, new_tail_ptr);
 
 	/* Start the transfer */
-	tsemac_dma_out32(lp, XAXIDMA_TX_TDESC_OFFSET, tail_p);
+	// tsemac_dma_out32(lp, XAXIDMA_TX_TDESC_OFFSET, DMASG_TX_BASE, tail_p);
+	tsemac_dma_out32(lp, DMASG_CHANNEL_STATUS, DMASG_TX_BASE, DMASG_CHANNEL_STATUS_LINKED_LIST_START);
 
 	/* Stop queue if next transmit may not have space */
 	if (tsemac_check_tx_bd_space(lp, MAX_SKB_FRAGS + 1)) {
@@ -217,89 +231,72 @@ static irqreturn_t tsemac_tx_irq(int irq, void *_ndev)
 	struct net_device *ndev = _ndev;
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
 
-	status = axienet_dma_in32(lp, XAXIDMA_TX_SR_OFFSET);
+	status = tsemac_dma_in32(lp, DMASG_CHANNEL_INTERRUPT_PENDING, DMASG_TX_BASE);
 
-	if (!(status & XAXIDMA_IRQ_ALL_MASK))
+	if (!(status & DMASG_IRQ_ALL_MASK))
 		return IRQ_NONE;
 
-	axienet_dma_out32(lp, XAXIDMA_TX_SR_OFFSET, status);
+	tsemac_dma_out32(lp, DMASG_CHANNEL_INTERRUPT_PENDING, DMASG_TX_BASE, status);
 
-	if (unlikely(status & XAXIDMA_IRQ_ERROR_MASK)) {
-		netdev_err(ndev, "DMA Tx error 0x%x\n", status);
-		netdev_err(ndev, "Current BD is at: 0x%x%08x\n",
-			   (lp->tx_bd_v[lp->tx_bd_ci]).phys_msb,
-			   (lp->tx_bd_v[lp->tx_bd_ci]).phys);
-		schedule_work(&lp->dma_err_task);
-	} else {
-		/* Disable further TX completion interrupts and schedule
-		 * NAPI to handle the completions.
-		 */
-		u32 cr = lp->tx_dma_cr;
+	/* Disable further TX completion interrupts and schedule
+		* NAPI to handle the completions.
+		*/
+	//TODO: assign tx_dma_cr during initialization
+	u32 cr = lp->tx_dma_cr;
+	cr &= ~(DMASG_IRQ_ALL_MASK);
+	tsemac_dma_out32(lp, DMASG_CHANNEL_INTERRUPT_ENABLE, DMASG_TX_BASE, cr);
 
-		cr &= ~(XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK);
-		axienet_dma_out32(lp, XAXIDMA_TX_CR_OFFSET, cr);
-
-		napi_schedule(&lp->napi_tx);
-	}
+	napi_schedule(&lp->napi_tx);
 
 	return IRQ_HANDLED;
 }
 
 static irqreturn_t tsemac_rx_irq(int irq, void *_ndev)
 {
-	//TODO: RX irq handler
 	unsigned int status;
 	struct net_device *ndev = _ndev;
-	struct axienet_local *lp = netdev_priv(ndev);
-
-	status = axienet_dma_in32(lp, XAXIDMA_RX_SR_OFFSET);
-
-	if (!(status & XAXIDMA_IRQ_ALL_MASK))
-		return IRQ_NONE;
-
-	axienet_dma_out32(lp, XAXIDMA_RX_SR_OFFSET, status);
-
-	if (unlikely(status & XAXIDMA_IRQ_ERROR_MASK)) {
-		netdev_err(ndev, "DMA Rx error 0x%x\n", status);
-		netdev_err(ndev, "Current BD is at: 0x%x%08x\n",
-			   (lp->rx_bd_v[lp->rx_bd_ci]).phys_msb,
-			   (lp->rx_bd_v[lp->rx_bd_ci]).phys);
-		schedule_work(&lp->dma_err_task);
-	} else {
-		/* Disable further RX completion interrupts and schedule
-		 * NAPI receive.
-		 */
-		u32 cr = lp->rx_dma_cr;
-
-		cr &= ~(XAXIDMA_IRQ_IOC_MASK | XAXIDMA_IRQ_DELAY_MASK);
-		axienet_dma_out32(lp, XAXIDMA_RX_CR_OFFSET, cr);
-
-		napi_schedule(&lp->napi_rx);
-	}
-
-	return IRQ_HANDLED;
-}
-
-static irqreturn_t tsemac_eth_irq(int irq, void *_ndev)
-{
-	//TODO: 
-	struct net_device *ndev = _ndev;
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
-	unsigned int pending;
 
-	pending = tsemac_in32(lp, XAE_IP_OFFSET);
-	if (!pending)
+	status = tsemac_dma_in32(lp, DMASG_CHANNEL_INTERRUPT_PENDING, DMASG_RX_BASE);
+
+	if (!(status & DMASG_IRQ_ALL_MASK))
 		return IRQ_NONE;
 
-	if (pending & XAE_INT_RXFIFOOVR_MASK)
-		ndev->stats.rx_missed_errors++;
+	tsemac_dma_out32(lp, DMASG_CHANNEL_INTERRUPT_PENDING, DMASG_RX_BASE, status);
 
-	if (pending & XAE_INT_RXRJECT_MASK)
-		ndev->stats.rx_frame_errors++;
+	/* Disable further RX completion interrupts and schedule
+		* NAPI receive.
+		*/
+	u32 cr = lp->rx_dma_cr;
 
-	tsemac_out32(lp, XAE_IS_OFFSET, pending);
+	cr &= ~(DMASG_IRQ_ALL_MASK);
+	tsemac_dma_out32(lp, DMASG_CHANNEL_INTERRUPT_ENABLE, DMASG_RX_BASE, cr);
+
+	napi_schedule(&lp->napi_rx);
+
 	return IRQ_HANDLED;
 }
+
+// static irqreturn_t tsemac_eth_irq(int irq, void *_ndev)
+// {
+// 	//TODO: 
+// 	struct net_device *ndev = _ndev;
+// 	struct efx_tsemac_local *lp = netdev_priv(ndev);
+// 	unsigned int pending;
+
+// 	pending = tsemac_in32(lp, XAE_IP_OFFSET);
+// 	if (!pending)
+// 		return IRQ_NONE;
+
+// 	if (pending & XAE_INT_RXFIFOOVR_MASK)
+// 		ndev->stats.rx_missed_errors++;
+
+// 	if (pending & XAE_INT_RXRJECT_MASK)
+// 		ndev->stats.rx_frame_errors++;
+
+// 	tsemac_out32(lp, XAE_IS_OFFSET, pending);
+// 	return IRQ_HANDLED;
+// }
 
 static int tsemac_open(struct net_device *ndev)
 {
@@ -341,18 +338,18 @@ static int tsemac_open(struct net_device *ndev)
 			  ndev->name, ndev);
 	if (ret)
 		goto err_rx_irq;
-	/* Enable interrupts for Axi Ethernet core (if defined) */
-	if (lp->eth_irq > 0) {
-		ret = request_irq(lp->eth_irq, tsemac_eth_irq, IRQF_SHARED,
-				  ndev->name, ndev);
-		if (ret)
-			goto err_eth_irq;
-	}
+	// /* Enable interrupts for Axi Ethernet core (if defined) */
+	// if (lp->eth_irq > 0) {
+	// 	ret = request_irq(lp->eth_irq, tsemac_eth_irq, IRQF_SHARED,
+	// 			  ndev->name, ndev);
+	// 	if (ret)
+	// 		goto err_eth_irq;
+	// }
 
 	return 0;
 
-err_eth_irq:
-	free_irq(lp->rx_irq, ndev);
+// err_eth_irq:
+// 	free_irq(lp->rx_irq, ndev);
 err_rx_irq:
 	free_irq(lp->tx_irq, ndev);
 err_tx_irq:
@@ -385,12 +382,12 @@ static int tsemac_stop(struct net_device *ndev)
 
 	tsemac_dma_stop(lp);
 
-	tsemac_out32(lp, XAE_IE_OFFSET, 0);
+	// tsemac_out32(lp, XAE_IE_OFFSET, 0);	//no interrupt in TSEMAC
 
 	cancel_work_sync(&lp->dma_err_task);
 
-	if (lp->eth_irq > 0)
-		free_irq(lp->eth_irq, ndev);
+	// if (lp->eth_irq > 0)
+	// 	free_irq(lp->eth_irq, ndev);
 	free_irq(lp->tx_irq, ndev);
 	free_irq(lp->rx_irq, ndev);
 
@@ -407,7 +404,7 @@ static int tsemac_change_mtu(struct net_device *ndev, int new_mtu)
 		return -EBUSY;
 
 	// invalid if greater than buffer size 
-	if ((new_mtu + VLAN_ETH_HLEN + XAE_TRL_SIZE) > lp->rxmem)
+	if ((new_mtu + ETHERNET_HDR_SIZE + ETHERNET_TRL_SIZE) > lp->rxmem)
 		return -EINVAL;
 
 	ndev->mtu = new_mtu;
@@ -434,7 +431,7 @@ static void tsemac_ethtools_get_regs(struct net_device *ndev, struct ethtool_reg
 {
 	int i;
 	u32 *data = (u32 *) ret;
-	size_t len = sizeof(u32) * tsemac_REGS_N;
+	size_t len = sizeof(u32) * LAST_REGISTER_ADDR;
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
 
 	regs->version = 0;
@@ -517,7 +514,7 @@ static int tsemac_tx_poll(struct napi_struct *napi, int budget)
 		 * cause an immediate interrupt if any TX packets are
 		 * already pending.
 		 */
-		tsemac_dma_out32(lp, XAXIDMA_TX_CR_OFFSET, lp->tx_dma_cr);
+		tsemac_dma_out32(lp, DMASG_CHANNEL_INTERRUPT_ENABLE, DMASG_TX_BASE, lp->tx_dma_cr);
 	}
 	return packets;
 }
@@ -530,13 +527,13 @@ static int tsemac_rx_poll(struct napi_struct *napi, int budget)
 	u32 size = 0;
 	int packets = 0;
 	dma_addr_t tail_p = 0;
-	struct efx_tsemac_local *cur_p;
+	struct dmasg_descriptor *cur_p;
 	struct sk_buff *skb, *new_skb;
 	struct efx_tsemac_local *lp = container_of(napi, struct efx_tsemac_local, napi_rx);
 
 	cur_p = &lp->rx_bd_v[lp->rx_bd_ci];
 
-	while (packets < budget && (cur_p->status & XAXIDMA_BD_STS_COMPLETE_MASK)) {
+	while (packets < budget && (cur_p->status & DMASG_DESCRIPTOR_STATUS_COMPLETED)) {
 		dma_addr_t phys;
 
 		/* Ensure we see complete descriptor update */
@@ -551,7 +548,7 @@ static int tsemac_rx_poll(struct napi_struct *napi, int budget)
 		 * receive it again.
 		 */
 		if (likely(skb)) {
-			length = cur_p->app4 & 0x0000FFFF;
+			length = cur_p->status & DMASG_DESCRIPTOR_STATUS_BYTES;
 
 			phys = desc_get_phys_addr(lp, cur_p);
 			dma_unmap_single(lp->dev, phys, lp->max_frm_size,
@@ -563,18 +560,20 @@ static int tsemac_rx_poll(struct napi_struct *napi, int budget)
 			skb->ip_summed = CHECKSUM_NONE;
 
 			/* if we're doing Rx csum offload, set it up */
-			if (lp->features & XAE_FEATURE_FULL_RX_CSUM) {
-				csumstatus = (cur_p->app2 &
-					      XAE_FULL_CSUM_STATUS_MASK) >> 3;
-				if (csumstatus == XAE_IP_TCP_CSUM_VALIDATED ||
-				    csumstatus == XAE_IP_UDP_CSUM_VALIDATED) {
-					skb->ip_summed = CHECKSUM_UNNECESSARY;
-				}
-			} else if ((lp->features & XAE_FEATURE_PARTIAL_RX_CSUM) != 0 &&
+			if (lp->features & TSEMAC_FEATURE_FULL_RX_CSUM) {
+				// csumstatus = (cur_p->app2 &
+				// 	      XAE_FULL_CSUM_STATUS_MASK) >> 3;
+				// if (csumstatus == XAE_IP_TCP_CSUM_VALIDATED ||
+				//     csumstatus == XAE_IP_UDP_CSUM_VALIDATED) {
+				// 	skb->ip_summed = CHECKSUM_UNNECESSARY;
+				// }
+				dev_err(lp->dev, "TSEMAC: unexpected FULL_RX_CSUM flag");
+			} else if ((lp->features & TSEMAC_FEATURE_PARTIAL_RX_CSUM) != 0 &&
 				   skb->protocol == htons(ETH_P_IP) &&
 				   skb->len > 64) {
-				skb->csum = be32_to_cpu(cur_p->app3 & 0xFFFF);
-				skb->ip_summed = CHECKSUM_COMPLETE;
+				// skb->csum = be32_to_cpu(cur_p->app3 & 0xFFFF);
+				// skb->ip_summed = CHECKSUM_COMPLETE;
+				dev_err(lp->dev, "TSEMAC: unexpected PARTIAL_RX_CSUM flag");
 			}
 
 			napi_gro_receive(napi, skb);
@@ -598,7 +597,7 @@ static int tsemac_rx_poll(struct napi_struct *napi, int budget)
 		}
 		desc_set_phys_addr(lp, phys, cur_p);
 
-		cur_p->cntrl = lp->max_frm_size;
+		cur_p->control = lp->max_frm_size;
 		cur_p->status = 0;
 		cur_p->skb = new_skb;
 
@@ -615,15 +614,16 @@ static int tsemac_rx_poll(struct napi_struct *napi, int budget)
 	lp->ndev->stats.rx_packets += packets;
 	lp->ndev->stats.rx_bytes += size;
 
-	if (tail_p)
-		tsemac_dma_out_addr(lp, XAXIDMA_RX_TDESC_OFFSET, tail_p);
+	//TODO: do we need to set descriptor pointer of the tail block
+	// if (tail_p)
+	// 	tsemac_dma_out_addr(lp, XAXIDMA_RX_TDESC_OFFSET, tail_p);
 
 	if (packets < budget && napi_complete_done(napi, packets)) {
 		/* Re-enable RX completion interrupts. This should
 		 * cause an immediate interrupt if any RX packets are
 		 * already pending.
 		 */
-		tsemac_dma_out32(lp, XAXIDMA_RX_CR_OFFSET, lp->rx_dma_cr);
+		tsemac_dma_out32(lp, DMASG_CHANNEL_INTERRUPT_ENABLE, DMASG_RX_BASE, lp->rx_dma_cr);
 	}
 	return packets;
 }
@@ -640,7 +640,11 @@ static int tsemac_ethtools_set_pauseparam(struct net_device *ndev, struct ethtoo
 	return phylink_ethtool_set_pauseparam(lp->phylink, epauseparm);
 }
 
-static int tsemac_ethtools_get_coalesce(struct net_device *ndev, struct ethtool_coalesce *ecoalesce)
+static int
+tsemac_ethtools_get_coalesce(struct net_device *ndev,
+			      struct ethtool_coalesce *ecoalesce,
+			      struct kernel_ethtool_coalesce *kernel_coal,
+			      struct netlink_ext_ack *extack)
 {
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
 
@@ -651,7 +655,11 @@ static int tsemac_ethtools_get_coalesce(struct net_device *ndev, struct ethtool_
 	return 0;
 }
 
-static int tsemac_ethtools_set_coalesce(struct net_device *ndev, struct ethtool_coalesce *ecoalesce)
+static int 
+tsemac_ethtools_set_coalesce(struct net_device *ndev,
+			      struct ethtool_coalesce *ecoalesce,
+			      struct kernel_ethtool_coalesce *kernel_coal,
+			      struct netlink_ext_ack *extack)
 {
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
 
@@ -815,7 +823,7 @@ static void tsemac_mac_link_up(struct phylink_config *config,
 	tsemac_out32(lp, TSEMAC_COMMAND_CONFIG, cmd_cfg);
 }
 
-void __tsemac_device_reset(struct efx_tsemac_local *lp, off_t offset)
+int __tsemac_device_reset(struct efx_tsemac_local *lp)
 {
 	tsemac_out32(lp, ETHERNET_CTRL_PHY_RST, 1);
 	tsemac_out32(lp, ETHERNET_CTRL_MAC_RST, 1);
@@ -824,7 +832,7 @@ void __tsemac_device_reset(struct efx_tsemac_local *lp, off_t offset)
 	tsemac_out32(lp, ETHERNET_CTRL_MAC_RST, 0);
 }
 
-static void tsemac_device_reset(struct net_device *ndev)
+static int tsemac_device_reset(struct net_device *ndev)
 {
 	//TODO: PHY, MAC, DMA reset
 	
@@ -890,7 +898,7 @@ static void tsemac_device_reset(struct net_device *ndev)
 	return 0;
 }
 
-static void tsemac_dma_err_handler(unsigned long data)
+static void tsemac_dma_err_handler(struct work_struct *work)
 {
 	u32 i;
 	u32 tsemac_status;
@@ -911,7 +919,7 @@ static void tsemac_dma_err_handler(unsigned long data)
 
 	for (i = 0; i < lp->tx_bd_num; i++) {
 		cur_p = &lp->tx_bd_v[i];
-		if (cur_p->cntrl) {
+		if (cur_p->control) {
 			dma_addr_t phys = desc_get_phys_addr(lp, cur_p);
 
 			dma_unmap_single(lp->dev, phys,
@@ -972,266 +980,6 @@ static void tsemac_dma_err_handler(unsigned long data)
 	// tsemac_setoptions(ndev, lp->options);
 	napi_enable(&lp->napi_rx);
 	napi_enable(&lp->napi_tx);
-}
-
-static int tsemac_probe(struct platform_device *pdev) 
-{
-	int ret;
-	struct device_node *np;
-	struct efx_tsemac_local *lp;
-	struct net_device *ndev;
-	struct resource *ethres;
-	u8 mac_addr[ETH_ALEN];
-	int addr_width = 32;
-	u32 value;
-    
-	ndev = alloc_etherdev(sizeof(*lp));
-	if (!ndev)
-		return -ENOMEM;
-
-	platform_set_drvdata(pdev, ndev);
-
-	SET_NETDEV_DEV(ndev, &pdev->dev);
-	ndev->flags &= ~IFF_MULTICAST;
-	ndev->features = NETIF_F_SG;	//TODO: determine whether supporting SG mode or not 
-	ndev->netdev_ops = &tsemac_netdev_ops;	//TODO: use custom ops
-	ndev->ethtool_ops = &tsemac_ethtool_ops;	//TODO: use custom ops
-
-	/* MTU range: 64 - 1500 */
-	ndev->min_mtu = 64;
-	ndev->max_mtu = EFXTSE_MTU;
-
-	//TODO: port lp to Efinix TSEMAC 
-	lp = netdev_priv(ndev);
-	lp->ndev = ndev;
-	lp->dev = &pdev->dev;
-	// lp->options = XAE_OPTION_DEFAULTS;	//TODO: may use custom options
-	lp->rx_bd_num = RX_BD_NUM_DEFAULT;	//is SG supported?
-	lp->tx_bd_num = TX_BD_NUM_DEFAULT;	//is SG supported?
-
-	//TODO: napi support
-	netif_napi_add(ndev, &lp->napi_rx, tsemac_rx_poll, NAPI_POLL_WEIGHT);
-	netif_napi_add(ndev, &lp->napi_tx, tsemac_tx_poll, NAPI_POLL_WEIGHT);
-
-	/* Map device registers */
-	lp->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &ethres);
-	// ethres = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	// lp->regs = devm_ioremap_resource(&pdev->dev, ethres);
-	if (IS_ERR(lp->regs)) {
-		dev_err(&pdev->dev, "could not map Efinix TSEMAC regs.\n");
-		ret = PTR_ERR(lp->regs);
-		goto free_netdev;
-	}
-	lp->regs_start = ethres->start;
-
-	/* Setup checksum offload, but default to off if not specified */
-	lp->features = 0;
-
-	//TODO: check whether Checksum exists in Efinix TSEMAC
-	ret = of_property_read_u32(pdev->dev.of_node, "efx,txcsum", &value);	//TODO: add this to device tree
-	if (!ret) {
-		switch (value) {
-		case 1:
-			lp->csum_offload_on_tx_path =
-				XAE_FEATURE_PARTIAL_TX_CSUM;
-			lp->features |= XAE_FEATURE_PARTIAL_TX_CSUM;
-			/* Can checksum TCP/UDP over IPv4. */
-			ndev->features |= NETIF_F_IP_CSUM;
-			break;
-		case 2:
-			lp->csum_offload_on_tx_path =
-				XAE_FEATURE_FULL_TX_CSUM;
-			lp->features |= XAE_FEATURE_FULL_TX_CSUM;
-			/* Can checksum TCP/UDP over IPv4. */
-			ndev->features |= NETIF_F_IP_CSUM;
-			break;
-		default:
-			lp->csum_offload_on_tx_path = XAE_NO_CSUM_OFFLOAD;
-		}
-	}
-	ret = of_property_read_u32(pdev->dev.of_node, "efx,rxcsum", &value);	//TODO: add this to device tree
-	if (!ret) {
-		switch (value) {
-		case 1:
-			lp->csum_offload_on_rx_path =
-				XAE_FEATURE_PARTIAL_RX_CSUM;
-			lp->features |= XAE_FEATURE_PARTIAL_RX_CSUM;
-			break;
-		case 2:
-			lp->csum_offload_on_rx_path =
-				XAE_FEATURE_FULL_RX_CSUM;
-			lp->features |= XAE_FEATURE_FULL_RX_CSUM;
-			break;
-		default:
-			lp->csum_offload_on_rx_path = XAE_NO_CSUM_OFFLOAD;
-		}
-	}
-
-	//TODO: customize the memory size in our own device tree
-	of_property_read_u32(pdev->dev.of_node, "xlnx,rxmem", &lp->rxmem);
-
-	// lp->switch_x_sgmii = of_property_read_bool(pdev->dev.of_node,
-	// 					   "xlnx,switch-x-sgmii");
-	//TODO: define our node to select the PHY mode 
-	/* Start with the proprietary, and broken phy_type */
-	ret = of_property_read_u32(pdev->dev.of_node, "xlnx,phy-type", &value);
-	if (!ret) {
-		netdev_warn(ndev, "Please upgrade your device tree binary blob to use phy-mode");
-		switch (value) {
-		case TSEMAC_PHY_TYPE_MII:
-			lp->phy_mode = PHY_INTERFACE_MODE_MII;
-			break;
-		case TSEMAC_PHY_TYPE_GMII:
-			lp->phy_mode = PHY_INTERFACE_MODE_GMII;
-			break;
-		case TSEMAC_PHY_TYPE_RGMII_2_0:
-			lp->phy_mode = PHY_INTERFACE_MODE_RGMII_ID;
-			break;
-		case TSEMAC_PHY_TYPE_SGMII:
-			lp->phy_mode = PHY_INTERFACE_MODE_SGMII;
-			break;
-		case TSEMAC_PHY_TYPE_1000BASE_X:
-			lp->phy_mode = PHY_INTERFACE_MODE_1000BASEX;
-			break;
-		default:
-			ret = -EINVAL;
-			goto free_netdev;
-		}
-	} else {
-		ret = of_get_phy_mode(pdev->dev.of_node, &lp->phy_mode);
-		if (ret)
-			goto free_netdev;
-	}
-	
-	//TODO: find how does of_parse_phandle work 
-	/* Find the DMA node, map the DMA registers, and decode the DMA IRQs */
-	np = of_parse_phandle(pdev->dev.of_node, "axistream-connected", 0);
-	if (np) {
-		struct resource dmares;
-
-		ret = of_address_to_resource(np, 0, &dmares);
-		if (ret) {
-			dev_err(&pdev->dev,
-				"unable to get DMA resource\n");
-			of_node_put(np);
-			goto free_netdev;
-		}
-		lp->dma_regs = devm_ioremap_resource(&pdev->dev,
-						     &dmares);
-		lp->rx_irq = irq_of_parse_and_map(np, 1);
-		lp->tx_irq = irq_of_parse_and_map(np, 0);
-		of_node_put(np);
-		lp->eth_irq = platform_get_irq_optional(pdev, 0);
-	} else {
-		/* Check for these resources directly on the Ethernet node. */
-		lp->dma_regs = devm_platform_get_and_ioremap_resource(pdev, 1, NULL);
-		lp->rx_irq = platform_get_irq(pdev, 1);
-		lp->tx_irq = platform_get_irq(pdev, 0);
-		lp->eth_irq = platform_get_irq_optional(pdev, 2);
-	}
-	if (IS_ERR(lp->dma_regs)) {
-		dev_err(&pdev->dev, "could not map DMA regs\n");
-		ret = PTR_ERR(lp->dma_regs);
-		goto free_netdev;
-	}
-	if ((lp->rx_irq <= 0) || (lp->tx_irq <= 0)) {
-		dev_err(&pdev->dev, "could not determine irqs\n");
-		ret = -ENOMEM;
-		goto free_netdev;
-	}
-
-	//TODO: add 64-bit system support
-
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(addr_width));
-	if (ret) {
-		dev_err(&pdev->dev, "No suitable DMA available\n");
-		goto cleanup_clk;
-	}
-
-	/* Retrieve the MAC address from device */
-	ret = of_get_mac_address(pdev->dev.of_node, mac_addr);
-	if (!ret) {
-		tsemac_set_mac_address(ndev, mac_addr);
-	} else {
-		dev_warn(&pdev->dev, "could not find MAC address property: %d\n",
-			 ret);
-		tsemac_set_mac_address(ndev, NULL);
-	}
-
-	//TODO: check whether we support interrupt coalescing
-	lp->coalesce_count_rx = EFXTSE_RX_COUNT;
-	lp->coalesce_usec_rx = EFXTSE_RX_USEC;
-	lp->coalesce_count_tx = EFXTSE_TX_COUNT;
-	lp->coalesce_usec_tx = EFXTSE_TX_USEC;
-	
-	/* Reset core now that clocks are enabled, prior to accessing MDIO */
-	ret = __tsemac_device_reset(lp);
-	if (ret)
-		goto cleanup_clk;
-
-	//TODO: define MDIO in devicetree
-	ret = tsemac_mdio_setup(lp);
-	if (ret)
-		dev_warn(&pdev->dev,
-			 "error registering MDIO bus: %d\n", ret);
-
-	if (lp->phy_mode == PHY_INTERFACE_MODE_SGMII ||
-	    lp->phy_mode == PHY_INTERFACE_MODE_1000BASEX) {
-		np = of_parse_phandle(pdev->dev.of_node, "pcs-handle", 0);
-		if (!np) {
-			dev_err(&pdev->dev, "pcs-handle required for 1000BaseX/SGMII\n");
-			ret = -EINVAL;
-			goto cleanup_mdio;
-		}
-		lp->pcs_phy = of_mdio_find_device(np);
-		if (!lp->pcs_phy) {
-			ret = -EPROBE_DEFER;
-			of_node_put(np);
-			goto cleanup_mdio;
-		}
-		of_node_put(np);
-		lp->pcs.ops = &tsemac_pcs_ops;
-		lp->pcs.poll = true;
-	}
-
-	lp->phylink_config.dev = &ndev->dev;
-	lp->phylink_config.type = PHYLINK_NETDEV;
-	lp->phylink_config.mac_capabilities = MAC_SYM_PAUSE | MAC_ASYM_PAUSE |
-		MAC_10FD | MAC_100FD | MAC_1000FD;	//TODO: verify what can the MAC do
-
-	__set_bit(lp->phy_mode, lp->phylink_config.supported_interfaces);
-	// if (lp->switch_x_sgmii) {	//TODO: should we use "switch_x_sgmii" in our device tree to determine PHY mode?
-	// 	__set_bit(PHY_INTERFACE_MODE_1000BASEX,
-	// 		  lp->phylink_config.supported_interfaces);
-	// 	__set_bit(PHY_INTERFACE_MODE_SGMII,
-	// 		  lp->phylink_config.supported_interfaces);
-	// }
-
-	lp->phylink = phylink_create(&lp->phylink_config, pdev->dev.fwnode,
-				     lp->phy_mode,
-				     &tsemac_phylink_ops);
-	if (IS_ERR(lp->phylink)) {
-		ret = PTR_ERR(lp->phylink);
-		dev_err(&pdev->dev, "phylink_create error (%i)\n", ret);
-		goto cleanup_mdio;
-	}
-	
-	ret = register_netdev(lp->ndev);
-	if (ret) {
-		dev_err(lp->dev, "register_netdev() error (%i)\n", ret);
-		goto free_netdev;
-	}
-	return 0;
-
-cleanup_mdio:
-	if (lp->pcs_phy)
-		put_device(&lp->pcs_phy->dev);
-	if (lp->mii_bus)
-		tsemac_mdio_teardown(lp);//TODO:
-free_netdev:
-	free_netdev(ndev);
-
-	return ret;
 }
 
 static int tsemac_remove(struct platform_device *pdev);
@@ -1299,6 +1047,266 @@ static struct platform_driver efinix_tse_driver = {
 		 .of_match_table = tsemac_of_match,
 	},
 };
+
+static int tsemac_probe(struct platform_device *pdev) 
+{
+	int ret;
+	struct device_node *np;
+	struct efx_tsemac_local *lp;
+	struct net_device *ndev;
+	struct resource *ethres;
+	u8 mac_addr[ETH_ALEN];
+	int addr_width = 32;
+	u32 value;
+    
+	ndev = alloc_etherdev(sizeof(*lp));
+	if (!ndev)
+		return -ENOMEM;
+
+	platform_set_drvdata(pdev, ndev);
+
+	SET_NETDEV_DEV(ndev, &pdev->dev);
+	ndev->flags &= ~IFF_MULTICAST;
+	ndev->features = NETIF_F_SG;	//TODO: determine whether supporting SG mode or not 
+	ndev->netdev_ops = &tsemac_netdev_ops;	//TODO: use custom ops
+	ndev->ethtool_ops = &tsemac_ethtool_ops;	//TODO: use custom ops
+
+	/* MTU range: 64 - 1500 */
+	ndev->min_mtu = 64;
+	ndev->max_mtu = ETHERNET_MTU;
+
+	//TODO: port lp to Efinix TSEMAC 
+	lp = netdev_priv(ndev);
+	lp->ndev = ndev;
+	lp->dev = &pdev->dev;
+	// lp->options = XAE_OPTION_DEFAULTS;	//TODO: may use custom options
+	lp->rx_bd_num = RX_BD_NUM_DEFAULT;	//is SG supported?
+	lp->tx_bd_num = TX_BD_NUM_DEFAULT;	//is SG supported?
+
+	//TODO: napi support
+	netif_napi_add(ndev, &lp->napi_rx, tsemac_rx_poll, NAPI_POLL_WEIGHT);
+	netif_napi_add(ndev, &lp->napi_tx, tsemac_tx_poll, NAPI_POLL_WEIGHT);
+
+	/* Map device registers */
+	lp->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &ethres);
+	// ethres = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	// lp->regs = devm_ioremap_resource(&pdev->dev, ethres);
+	if (IS_ERR(lp->regs)) {
+		dev_err(&pdev->dev, "could not map Efinix TSEMAC regs.\n");
+		ret = PTR_ERR(lp->regs);
+		goto free_netdev;
+	}
+	lp->regs_start = ethres->start;
+
+	/* Setup checksum offload, but default to off if not specified */
+	lp->features = 0;
+
+	//TODO: check whether Checksum exists in Efinix TSEMAC
+	ret = of_property_read_u32(pdev->dev.of_node, "efx,txcsum", &value);	//TODO: add this to device tree
+	if (!ret) {
+		switch (value) {
+		case 1:
+			lp->csum_offload_on_tx_path =
+				TSEMAC_FEATURE_PARTIAL_TX_CSUM;
+			lp->features |= TSEMAC_FEATURE_PARTIAL_TX_CSUM;
+			/* Can checksum TCP/UDP over IPv4. */
+			ndev->features |= NETIF_F_IP_CSUM;
+			break;
+		case 2:
+			lp->csum_offload_on_tx_path =
+				TSEMAC_FEATURE_FULL_TX_CSUM;
+			lp->features |= TSEMAC_FEATURE_FULL_TX_CSUM;
+			/* Can checksum TCP/UDP over IPv4. */
+			ndev->features |= NETIF_F_IP_CSUM;
+			break;
+		default:
+			lp->csum_offload_on_tx_path = TSEMAC_NO_CSUM_OFFLOAD;
+		}
+	}
+	ret = of_property_read_u32(pdev->dev.of_node, "efx,rxcsum", &value);	//TODO: add this to device tree
+	if (!ret) {
+		switch (value) {
+		case 1:
+			lp->csum_offload_on_rx_path =
+				TSEMAC_FEATURE_PARTIAL_RX_CSUM;
+			lp->features |= TSEMAC_FEATURE_PARTIAL_RX_CSUM;
+			break;
+		case 2:
+			lp->csum_offload_on_rx_path =
+				TSEMAC_FEATURE_FULL_RX_CSUM;
+			lp->features |= TSEMAC_FEATURE_FULL_RX_CSUM;
+			break;
+		default:
+			lp->csum_offload_on_rx_path = TSEMAC_NO_CSUM_OFFLOAD;
+		}
+	}
+
+	//TODO: customize the memory size in our own device tree
+	of_property_read_u32(pdev->dev.of_node, "xlnx,rxmem", &lp->rxmem);
+
+	// lp->switch_x_sgmii = of_property_read_bool(pdev->dev.of_node,
+	// 					   "xlnx,switch-x-sgmii");
+	//TODO: define our node to select the PHY mode 
+	/* Start with the proprietary, and broken phy_type */
+	ret = of_property_read_u32(pdev->dev.of_node, "xlnx,phy-type", &value);
+	if (!ret) {
+		netdev_warn(ndev, "Please upgrade your device tree binary blob to use phy-mode");
+		switch (value) {
+		case TSEMAC_PHY_TYPE_MII:
+			lp->phy_mode = PHY_INTERFACE_MODE_MII;
+			break;
+		case TSEMAC_PHY_TYPE_GMII:
+			lp->phy_mode = PHY_INTERFACE_MODE_GMII;
+			break;
+		case TSEMAC_PHY_TYPE_RGMII_2_0:
+			lp->phy_mode = PHY_INTERFACE_MODE_RGMII_ID;
+			break;
+		case TSEMAC_PHY_TYPE_SGMII:
+			lp->phy_mode = PHY_INTERFACE_MODE_SGMII;
+			break;
+		case TSEMAC_PHY_TYPE_1000BASE_X:
+			lp->phy_mode = PHY_INTERFACE_MODE_1000BASEX;
+			break;
+		default:
+			ret = -EINVAL;
+			goto free_netdev;
+		}
+	} else {
+		ret = of_get_phy_mode(pdev->dev.of_node, &lp->phy_mode);
+		if (ret)
+			goto free_netdev;
+	}
+	
+	//TODO: find how does of_parse_phandle work 
+	/* Find the DMA node, map the DMA registers, and decode the DMA IRQs */
+	np = of_parse_phandle(pdev->dev.of_node, "axistream-connected", 0);
+	if (np) {
+		struct resource dmares;
+
+		ret = of_address_to_resource(np, 0, &dmares);
+		if (ret) {
+			dev_err(&pdev->dev,
+				"unable to get DMA resource\n");
+			of_node_put(np);
+			goto free_netdev;
+		}
+		lp->dma_regs = devm_ioremap_resource(&pdev->dev,
+						     &dmares);
+		lp->rx_irq = irq_of_parse_and_map(np, 1);
+		lp->tx_irq = irq_of_parse_and_map(np, 0);
+		of_node_put(np);
+		// lp->eth_irq = platform_get_irq_optional(pdev, 0);
+	} else {
+		/* Check for these resources directly on the Ethernet node. */
+		lp->dma_regs = devm_platform_get_and_ioremap_resource(pdev, 1, NULL);
+		lp->rx_irq = platform_get_irq(pdev, 1);
+		lp->tx_irq = platform_get_irq(pdev, 0);
+		// lp->eth_irq = platform_get_irq_optional(pdev, 2);
+	}
+	if (IS_ERR(lp->dma_regs)) {
+		dev_err(&pdev->dev, "could not map DMA regs\n");
+		ret = PTR_ERR(lp->dma_regs);
+		goto free_netdev;
+	}
+	if ((lp->rx_irq <= 0) || (lp->tx_irq <= 0)) {
+		dev_err(&pdev->dev, "could not determine irqs\n");
+		ret = -ENOMEM;
+		goto free_netdev;
+	}
+
+	//TODO: add 64-bit system support
+
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(addr_width));
+	if (ret) {
+		dev_err(&pdev->dev, "No suitable DMA available\n");
+		goto free_netdev;
+	}
+
+	/* Retrieve the MAC address from device */
+	ret = of_get_mac_address(pdev->dev.of_node, mac_addr);
+	if (!ret) {
+		tsemac_set_mac_address(ndev, mac_addr);
+	} else {
+		dev_warn(&pdev->dev, "could not find MAC address property: %d\n",
+			 ret);
+		tsemac_set_mac_address(ndev, NULL);
+	}
+
+	//TODO: check whether we support interrupt coalescing
+	lp->coalesce_count_rx = EFXTSE_RX_COUNT;
+	lp->coalesce_usec_rx = EFXTSE_RX_USEC;
+	lp->coalesce_count_tx = EFXTSE_TX_COUNT;
+	lp->coalesce_usec_tx = EFXTSE_TX_USEC;
+	
+	/* Reset core now that clocks are enabled, prior to accessing MDIO */
+	ret = __tsemac_device_reset(lp);
+	if (ret)
+		goto free_netdev;
+
+	//TODO: define MDIO in devicetree
+	ret = tsemac_mdio_setup(lp);
+	if (ret)
+		dev_warn(&pdev->dev,
+			 "error registering MDIO bus: %d\n", ret);
+
+	if (lp->phy_mode == PHY_INTERFACE_MODE_SGMII ||
+	    lp->phy_mode == PHY_INTERFACE_MODE_1000BASEX) {
+		np = of_parse_phandle(pdev->dev.of_node, "pcs-handle", 0);
+		if (!np) {
+			dev_err(&pdev->dev, "pcs-handle required for 1000BaseX/SGMII\n");
+			ret = -EINVAL;
+			goto cleanup_mdio;
+		}
+		lp->pcs_phy = of_mdio_find_device(np);
+		if (!lp->pcs_phy) {
+			ret = -EPROBE_DEFER;
+			of_node_put(np);
+			goto cleanup_mdio;
+		}
+		of_node_put(np);
+		lp->pcs.ops = &tsemac_pcs_ops;
+		lp->pcs.poll = true;
+	}
+
+	lp->phylink_config.dev = &ndev->dev;
+	lp->phylink_config.type = PHYLINK_NETDEV;
+	lp->phylink_config.mac_capabilities = MAC_SYM_PAUSE | MAC_ASYM_PAUSE |
+		MAC_10FD | MAC_100FD | MAC_1000FD;	//TODO: verify what can the MAC do
+
+	__set_bit(lp->phy_mode, lp->phylink_config.supported_interfaces);
+	// if (lp->switch_x_sgmii) {	//TODO: should we use "switch_x_sgmii" in our device tree to determine PHY mode?
+	// 	__set_bit(PHY_INTERFACE_MODE_1000BASEX,
+	// 		  lp->phylink_config.supported_interfaces);
+	// 	__set_bit(PHY_INTERFACE_MODE_SGMII,
+	// 		  lp->phylink_config.supported_interfaces);
+	// }
+
+	lp->phylink = phylink_create(&lp->phylink_config, pdev->dev.fwnode,
+				     lp->phy_mode,
+				     &tsemac_phylink_ops);
+	if (IS_ERR(lp->phylink)) {
+		ret = PTR_ERR(lp->phylink);
+		dev_err(&pdev->dev, "phylink_create error (%i)\n", ret);
+		goto cleanup_mdio;
+	}
+	
+	ret = register_netdev(lp->ndev);
+	if (ret) {
+		dev_err(lp->dev, "register_netdev() error (%i)\n", ret);
+		goto free_netdev;
+	}
+	return 0;
+
+cleanup_mdio:
+	if (lp->pcs_phy)
+		put_device(&lp->pcs_phy->dev);
+	if (lp->mii_bus)
+		tsemac_mdio_teardown(lp);//TODO:
+free_netdev:
+	free_netdev(ndev);
+
+	return ret;
+}
 
 module_platform_driver(efinix_tse_driver);
 

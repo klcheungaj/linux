@@ -6,6 +6,8 @@
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
 #include <linux/if_vlan.h>
+#include <linux/phylink.h>
+
 
 #define ETHERNET_HDR_SIZE				14 	/* Size of Ethernet header */
 #define ETHERNET_TRL_SIZE			 	4 	/* Size of Ethernet trailer (FCS) */
@@ -18,38 +20,38 @@
 #define EFXTSE_RX_COUNT		1
 #define EFXTSE_RX_USEC		50
 
-#define BIT_0   (1 << 0)
-#define BIT_1   (1 << 1)
-#define BIT_2   (1 << 2)
-#define BIT_3   (1 << 3)
-#define BIT_4   (1 << 4)
-#define BIT_5   (1 << 5)
-#define BIT_6   (1 << 6)
-#define BIT_7   (1 << 7)
-#define BIT_8   (1 << 8)
-#define BIT_9   (1 << 9)
-#define BIT_10  (1 << 10)
-#define BIT_11  (1 << 11)
-#define BIT_12  (1 << 12)
-#define BIT_13  (1 << 13)
-#define BIT_14  (1 << 14)
-#define BIT_15  (1 << 15)
-#define BIT_16  (1 << 16)
-#define BIT_17  (1 << 17)
-#define BIT_18  (1 << 18)
-#define BIT_19  (1 << 19)
-#define BIT_20  (1 << 20)
-#define BIT_21  (1 << 21)
-#define BIT_22  (1 << 22)
-#define BIT_23  (1 << 23)
-#define BIT_24  (1 << 24)
-#define BIT_25  (1 << 25)
-#define BIT_26  (1 << 26)
-#define BIT_27  (1 << 27)
-#define BIT_28  (1 << 28)
-#define BIT_29  (1 << 29)
-#define BIT_30  (1 << 30)
-#define BIT_31  (1 << 31)
+#define BIT_0   (1U << 0)
+#define BIT_1   (1U << 1)
+#define BIT_2   (1U << 2)
+#define BIT_3   (1U << 3)
+#define BIT_4   (1U << 4)
+#define BIT_5   (1U << 5)
+#define BIT_6   (1U << 6)
+#define BIT_7   (1U << 7)
+#define BIT_8   (1U << 8)
+#define BIT_9   (1U << 9)
+#define BIT_10  (1U << 10)
+#define BIT_11  (1U << 11)
+#define BIT_12  (1U << 12)
+#define BIT_13  (1U << 13)
+#define BIT_14  (1U << 14)
+#define BIT_15  (1U << 15)
+#define BIT_16  (1U << 16)
+#define BIT_17  (1U << 17)
+#define BIT_18  (1U << 18)
+#define BIT_19  (1U << 19)
+#define BIT_20  (1U << 20)
+#define BIT_21  (1U << 21)
+#define BIT_22  (1U << 22)
+#define BIT_23  (1U << 23)
+#define BIT_24  (1U << 24)
+#define BIT_25  (1U << 25)
+#define BIT_26  (1U << 26)
+#define BIT_27  (1U << 27)
+#define BIT_28  (1U << 28)
+#define BIT_29  (1U << 29)
+#define BIT_30  (1U << 30)
+#define BIT_31  (1U << 31)
 
 #define ETHERNET_CMD_TX_ENA                 BIT_0
 #define ETHERNET_CMD_RX_ENA                 BIT_1
@@ -165,6 +167,16 @@
 #define DMASG_RX_BASE											0x0
 #define DMASG_TX_BASE											0x80
 
+#define DMASG_IRQ_ALL_MASK										0x1F
+
+#define TSEMAC_FEATURE_PARTIAL_RX_CSUM	(1 << 0)
+#define TSEMAC_FEATURE_PARTIAL_TX_CSUM	(1 << 1)
+#define TSEMAC_FEATURE_FULL_RX_CSUM	(1 << 2)
+#define TSEMAC_FEATURE_FULL_TX_CSUM	(1 << 3)
+#define TSEMAC_FEATURE_DMA_64BIT		(1 << 4)
+
+#define TSEMAC_NO_CSUM_OFFLOAD		0
+
 struct dmasg_descriptor {
 	// See all DMASG_DESCRIPTOR_STATUS_* defines
 	// Updated by the DMA at the end of each descriptor and when a S -> M packet is completely transferred into memory
@@ -191,6 +203,7 @@ struct efx_tsemac_local {
 	struct mdio_device *pcs_phy;
 	struct phylink_pcs pcs;
 
+	struct clk *axi_clk;
 	/* MDIO bus data */
 	struct mii_bus *mii_bus;	/* MII bus reference */
 	u8 mii_clk_div;
@@ -200,7 +213,7 @@ struct efx_tsemac_local {
 	void __iomem *regs;
 	void __iomem *dma_regs;
 
-	struct tasklet_struct dma_err_tasklet;
+	struct work_struct dma_err_task;
 
 	int tx_irq;
 	int rx_irq;
@@ -309,9 +322,20 @@ static inline void tsemac_dma_out32(struct efx_tsemac_local *lp, off_t reg, off_
 	return iowrite32(value, lp->dma_regs + reg + ch_offset);
 }
 
+int __tsemac_device_reset(struct efx_tsemac_local *lp);
+
 int tsemac_free_tx_chain(struct efx_tsemac_local *lp, u32 first_bd,
 				 int nr_bds, bool force, u32 *sizep, int budget);
 
-void __tsemac_device_reset(struct efx_tsemac_local *lp, off_t offset);
+void tsemac_dma_stop(struct efx_tsemac_local *lp);
 
+void tsemac_dma_bd_release(struct net_device *ndev);
+
+int tsemac_dma_bd_init(struct net_device *ndev);
+
+void tsemac_dma_start(struct efx_tsemac_local *lp);
+
+void tsemac_mdio_teardown(struct efx_tsemac_local *lp);
+
+int tsemac_mdio_setup(struct efx_tsemac_local *lp);
 #endif

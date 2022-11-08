@@ -59,7 +59,7 @@ int tsemac_free_tx_chain(struct efx_tsemac_local *lp, u32 first_bd,
 	return i;
 }
 
-static void tsemac_dma_bd_release(struct net_device *ndev)
+void tsemac_dma_bd_release(struct net_device *ndev)
 {
 	int i;
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
@@ -101,7 +101,7 @@ static void tsemac_dma_bd_release(struct net_device *ndev)
 			  lp->rx_bd_p);
 }
 
-static void tsemac_dma_stop(struct efx_tsemac_local *lp)
+void tsemac_dma_stop(struct efx_tsemac_local *lp)
 {
 	int count;
 	u32 cr, sr;
@@ -136,7 +136,7 @@ static void tsemac_dma_stop(struct efx_tsemac_local *lp)
 	tsemac_unlock_mii(lp);
 }
 
-static void tsemac_dma_start(struct efx_tsemac_local *lp)
+void tsemac_dma_start(struct efx_tsemac_local *lp)
 {
 	//TODO: find an alternative solution for DMA interrupt coalescing
 	//		assume interrupt at the first packet
@@ -174,7 +174,7 @@ static void tsemac_dma_start(struct efx_tsemac_local *lp)
 	tsemac_dma_out32(lp, DMASG_TX_BASE + DMASG_CHANNEL_STATUS, lp->tx_dma_cr);
 }
 
-static int tsemac_dma_bd_init(struct net_device *ndev)
+int tsemac_dma_bd_init(struct net_device *ndev)
 {
 	int i;
 	struct sk_buff *skb;
