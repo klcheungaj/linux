@@ -1,3 +1,14 @@
-1. add a fixed-clock in our custom device tree
-2. choose Ethernet PHY in the device tree
-3. set CPU clock in the device tree
+in device tree
+    1. add a fixed-clock
+    2. choose Ethernet PHY
+    3. set CPU clock
+    4. add rxcsum, txcsum, rxmem
+    5. add MDIO node
+	6. define a AXI clock in the device tree
+    7. set DMA TX and RX irq 
+    8. define DMA and connect it to TSEMAC
+
+DMASG
+    1. INPUT/OUTPUT config
+    2. interrupt enable
+    3. completion on packet / wait on packet
