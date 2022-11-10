@@ -1,0 +1,18 @@
+
+
+config NET_VENDOR_EFINIX
+	bool "Efinix devices"
+	default y
+	help
+	  type 'N' to to skip all configuration about Efinix
+
+if NET_VENDOR_EFINIX
+
+config EFINIX_TSEMAC
+	tristate "Efinix Triple Speed Ethernet MAC support"
+	depends on HAS_IOMEM
+	select PHYLIB
+	help
+	  This driver supports the Triple Spped Ethernet MAC Core from Efinix.
+
+endif # NET_VENDOR_EFINIX

@@ -100,9 +100,11 @@ static inline int tsemac_check_tx_bd_space(struct efx_tsemac_local *lp, int num_
 {
 	struct dmasg_descriptor *cur_p;
 
-	/* Ensure we see all descriptor updates from device or TX polling */
+	/** Ensure we see all descriptor updates from device or TX polling
+	 *  Add constant 1 because 1 bd is reserved for indicating the tail
+	 */
 	rmb();
-	cur_p = &lp->tx_bd_v[(READ_ONCE(lp->tx_bd_tail) + num_frag) %
+	cur_p = &lp->tx_bd_v[(READ_ONCE(lp->tx_bd_tail) + num_frag + 1) %
 			     lp->tx_bd_num];
 	if (cur_p->control)
 		return NETDEV_TX_BUSY;
@@ -145,20 +147,6 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 		return NETDEV_TX_OK;
 	}
 	//TODO: support hardware checksum in the future
-	// if (skb->ip_summed == CHECKSUM_PARTIAL) {
-	// 	if (lp->features & TSEMAC_FEATURE_FULL_TX_CSUM) {
-	// 		/* Tx Full Checksum Offload Enabled */
-	// 		cur_p->app0 |= 2;
-	// 	} else if (lp->features & TSEMAC_FEATURE_PARTIAL_TX_CSUM) {
-	// 		csum_start_off = skb_transport_offset(skb);
-	// 		csum_index_off = csum_start_off + skb->csum_offset;
-	// 		/* Tx Partial Checksum Offload Enabled */
-	// 		cur_p->app0 |= 1;
-	// 		cur_p->app1 = (csum_start_off << 16) | csum_index_off;
-	// 	}
-	// } else if (skb->ip_summed == CHECKSUM_UNNECESSARY) {
-	// 	cur_p->app0 |= 2; /* Tx Full Checksum Offload Enabled */
-	// }
 
 	phys = dma_map_single(lp->dev, skb->data,
 			      skb_headlen(skb), DMA_TO_DEVICE);
@@ -169,6 +157,8 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 		return NETDEV_TX_OK;
 	}
 	desc_set_tx_phys_addr(lp, phys, cur_p);
+	cur_p->control = skb_headlen(skb) | DMASG_DESCRIPTOR_CONTROL_BYTES;
+	cur_p->status = 0;
 
 	for (ii = 0; ii < num_frag; ii++) {
 		if (++new_tail_ptr >= lp->tx_bd_num)
@@ -189,8 +179,8 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 		}
 		desc_set_tx_phys_addr(lp, phys, cur_p);
 		cur_p->control = skb_frag_size(frag) | DMASG_DESCRIPTOR_CONTROL_BYTES;
+		cur_p->status = 0;
 	}
-	//TODO: check the end of frame mask in our sg_bd
 	cur_p->control |= DMASG_DESCRIPTOR_CONTROL_END_OF_PACKET;
 	cur_p->skb = skb;
 
@@ -198,9 +188,11 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 	if (++new_tail_ptr >= lp->tx_bd_num)
 		new_tail_ptr = 0;
 	WRITE_ONCE(lp->tx_bd_tail, new_tail_ptr);
+	//TODO: should I set completed flag manually?
+	// tsemac_dma_out32(lp, XAXIDMA_TX_TDESC_OFFSET, DMASG_TX_BASE, tail_p);
+	lp->tx_bd_v[new_tail_ptr].status = DMASG_DESCRIPTOR_STATUS_COMPLETED;
 
 	/* Start the transfer */
-	// tsemac_dma_out32(lp, XAXIDMA_TX_TDESC_OFFSET, DMASG_TX_BASE, tail_p);
 	tsemac_dma_out32(lp, DMA_CH_STATUS, DMASG_TX_BASE, DMA_CH_STATUS_LINKED_LIST_START);
 
 	/* Stop queue if next transmit may not have space */
