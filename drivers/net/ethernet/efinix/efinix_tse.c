@@ -74,8 +74,7 @@ static int netdev_set_mac_address(struct net_device *ndev, void *p)
 
 static void tsemac_set_multicast_list(struct net_device *ndev)
 {
-	int i;
-	u32 reg, af0reg, af1reg;
+	u32 reg;
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
 
 	//TODO: support other IFF mode 
@@ -115,8 +114,6 @@ static netdev_tx_t tsemac_start_xmit(struct sk_buff *skb, struct net_device *nde
 {
 	u32 ii;
 	u32 num_frag;
-	u32 csum_start_off;
-	u32 csum_index_off;
 	skb_frag_t *frag;
 	dma_addr_t tail_p, phys;
 	u32 orig_tail_ptr, new_tail_ptr;
@@ -376,10 +373,8 @@ static int tsemac_change_mtu(struct net_device *ndev, int new_mtu)
 	return 0;
 }
 
-#ifdef
 //TODO: determine whether need to implement it
-static void tsemac_poll_controller(struct net_device *ndev);
-#endif
+//static void tsemac_poll_controller(struct net_device *ndev);
 static void tsemac_ethtools_get_drvinfo(struct net_device *ndev, struct ethtool_drvinfo *ed)
 {
 	strlcpy(ed->driver, DRIVER_NAME, sizeof(ed->driver));
@@ -486,7 +481,6 @@ static int tsemac_tx_poll(struct napi_struct *napi, int budget)
 static int tsemac_rx_poll(struct napi_struct *napi, int budget)
 {
 	u32 length;
-	u32 csumstatus;
 	u32 size = 0;
 	int packets = 0;
 	dma_addr_t tail_p = 0;
@@ -753,7 +747,7 @@ static void tsemac_mac_link_up(struct phylink_config *config,
 {
 	struct net_device *ndev = to_net_dev(config->dev);
 	struct efx_tsemac_local *lp = netdev_priv(ndev);
-	u32 cmd_cfg, fcc_reg;
+	u32 cmd_cfg;
 
 	cmd_cfg = tsemac_in32(lp, TSEMAC_COMMAND_CONFIG);
 
@@ -793,6 +787,7 @@ int __tsemac_device_reset(struct efx_tsemac_local *lp)
 	msleep(100);
 	tsemac_out32(lp, ETHERNET_CTRL_PHY_RST, 0);
 	tsemac_out32(lp, ETHERNET_CTRL_MAC_RST, 0);
+	return 0;
 }
 
 static int tsemac_device_reset(struct net_device *ndev)
@@ -1007,6 +1002,7 @@ static const struct net_device_ops tsemac_netdev_ops = {
 	.ndo_change_mtu	= tsemac_change_mtu,
 	.ndo_set_mac_address = netdev_set_mac_address,
 	.ndo_validate_addr = eth_validate_addr,
+	.ndo_eth_ioctl = tsemac_ioctl,
 	.ndo_set_rx_mode = tsemac_set_multicast_list,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller = tsemac_poll_controller,
